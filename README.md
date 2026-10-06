@@ -48,13 +48,37 @@ AIFF, WAV and DSF. Only unsynced lyrics are cached.
 
 Requires Picard 3.0 or later.
 
-1. In Picard, open **Options > Plugins > Install Plugin**.
-2. On the local tab, select this folder.
-3. Open **Help > View Log** and find the line `Lyrics cache: using <path> (N songs)`.
+1. In Picard, click **Options > Options…**, then select the **Plugins** page.
+2. Click **Install Plugin…**.
+3. Install from one of these tabs:
+   - **URL**: in **Git URL:**, type
+     `https://github.com/yoavain/musicbrainz-picard-shironet-lyrics`.
+   - **Local**: in **Directory:**, select a clone of this repository. Use this tab to work on
+     the code; select **Load in-place (ignore git)** to load the folder as it is.
+4. Click **Install…**. Picard warns that the plugin is not in the official registry.
+5. Click **Help > View Log** and find the line `Lyrics cache: using <path> (N songs)`.
    It shows where the cache file is.
 
 The cache is `plugin-data/shironet-lyrics/lyrics.sqlite3` under Picard's app-data folder.
 It holds full lyrics text: keep it out of git and out of synced folders.
+
+## Use with LRCLIB Lyrics (non-Hebrew songs)
+
+This plugin covers Hebrew songs only. For other songs, it can run next to
+**LRCLIB Lyrics**, which fetches synced and plain lyrics from [LRCLIB](https://lrclib.net).
+The original [izaz4141/picard-lrclib](https://github.com/izaz4141/picard-lrclib) supports
+Picard 2 only; the Picard 3 version is the fork
+[Opt6/picard-lrclib](https://github.com/Opt6/picard-lrclib). The fork is not in the official
+registry and has not been reviewed here.
+
+To install it, follow the steps in [Install](#install) with the **URL** tab and the Git URL
+`https://github.com/Opt6/picard-lrclib`.
+
+Both plugins write the **Lyrics** tag when Picard matches a file. Shironet Lyrics fills it
+only when the file has no lyrics and the song is in the cache. Which plugin wins on a
+Hebrew song depends on which one runs first and on whether LRCLIB Lyrics replaces
+existing lyrics; check a matched Hebrew album before you save it. LRCLIB Lyrics also
+creates and renames `.lrc` files, so `scripts/export_lyrics.py` skips those tracks.
 
 ## Batch run from the command line
 
