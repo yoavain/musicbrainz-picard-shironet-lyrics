@@ -1,0 +1,32 @@
+uuid = "c0e10fee-0329-4441-ab42-0adaa02b1f96"
+name = "Shironet Lyrics"
+description = "Keeps a local cache of the Hebrew lyrics embedded in your files, for Shironet lookups."
+long_description = """
+Builds a local SQLite cache of Hebrew song lyrics, keyed by artist and title. A song is
+Hebrew when its title or artist contains a Hebrew letter, its language tag is Hebrew, or
+its lyrics are mostly Hebrew.
+
+- **Tools > Shironet Lyrics > Scan folder into lyrics cache** reads the lyrics embedded in
+  every audio file under a folder. A rescan reads only new files and files whose size or
+  modification time changed.
+- While Picard runs, every loaded file adds its lyrics to the cache, and every save
+  updates it. Lyrics changed in a save replace the cached ones.
+- When another file already gave different lyrics for the same artist and title, the
+  cached lyrics are kept and the file is named in the log.
+
+Artist and title are matched loosely: niqqud, punctuation, "feat." parts and version
+suffixes such as "(Live)" are ignored.
+
+- When a file without lyrics is matched to a track, its **Lyrics** tag is filled from the
+  cache. Right-click > **Shironet Lyrics > Lookup Lyrics** does it on demand.
+
+Missing lyrics are fetched from Shironet by a separate command-line worker
+(`scripts/shironet_worker.py`), slowly, because Shironet blocks fast automated access.
+"""
+api = ["3.0"]
+authors = ["yoavain"]
+license = "GPL-2.0-or-later"
+license_url = "https://www.gnu.org/licenses/gpl-2.0.html"
+categories = ["metadata"]
+min_python_version = "3.10"
+source_locale = "en"
