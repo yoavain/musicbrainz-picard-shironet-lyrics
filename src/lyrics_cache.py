@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import enum
 import os
 import re
@@ -16,10 +16,16 @@ import sqlite3
 import unicodedata
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 6
 
 SOURCE_EMBEDDED = 'embedded'
 SOURCE_SHIRONET = 'shironet'
+
+# Hours before a song that Shironet did not have is searched again: a week.
+DEFAULT_MISS_TTL_HOURS = 7 * 24
+# Hours before a song that failed on network errors is tried again: errors say
+# nothing about whether Shironet has the song.
+FAILED_RETRY_HOURS = 24
 
 # Seconds to wait for a write lock held by another connection (the folder scan
 # runs on its own connection while Picard hooks write on the GUI thread).
@@ -41,7 +47,10 @@ CREATE TABLE IF NOT EXISTS scanned_files (
     path       TEXT PRIMARY KEY,
     mtime_ns   INTEGER NOT NULL,
     size       INTEGER NOT NULL,
-    scanned_at TEXT NOT NULL
+    scanned_at TEXT NOT NULL,
+    artist     TEXT,                       -- the file's own tags when it was read
+    title      TEXT,
+    has_lyrics INTEGER                     -- 1 or 0; NULL for files read before schema 6
 ) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
@@ -56,7 +65,10 @@ CREATE TABLE IF NOT EXISTS shironet_queue (
     status     TEXT NOT NULL,              -- 'pending' | 'done' | 'not_found' | 'failed'
     attempts   INTEGER NOT NULL DEFAULT 0,
     lyrics_url TEXT,                       -- found by search; saves a search on retry
+    alt_artist TEXT,                       -- a second exact name to try, e.g. the MusicBrainz one
+    alt_title  TEXT,
     result     TEXT,                       -- short outcome note
+    retry_after TEXT,                      -- not_found/failed: eligible again from this time
     added_at   TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     PRIMARY KEY (artist_key, title_key)
@@ -122,6 +134,13 @@ class PutResult(enum.Enum):
 
 
 @dataclass(frozen=True)
+class ScannedFile:
+    artist: str
+    title: str
+    has_lyrics: bool
+
+
+@dataclass(frozen=True)
 class Entry:
     artist: str
     title: str
@@ -183,6 +202,11 @@ def normalize_path(path: str) -> str:
     return os.path.normcase(os.path.abspath(path))
 
 
+def strip_language_prefix(text: str) -> str:
+    """Remove a leading "heb||"- or "eng|None|"-style prefix (and leading whitespace)."""
+    return _LANGUAGE_PREFIX.sub('', text.lstrip())
+
+
 def clean_lyrics(text: str | None) -> str:
     """Return the lyrics without the parts that are not lyrics.
 
@@ -193,7 +217,7 @@ def clean_lyrics(text: str | None) -> str:
     """
     if not text:
         return ''
-    text = _LANGUAGE_PREFIX.sub('', text.lstrip())
+    text = strip_language_prefix(text)
     lines = [line.rstrip() for line in text.replace('\r\n', '\n').replace('\r', '\n').split('\n')]
     credit_lines = [index for index, line in enumerate(lines[:CREDIT_SEARCH_LINES]) if _CREDIT_LINE.match(line)]
     if credit_lines:
@@ -249,13 +273,51 @@ class LyricsCache:
             # Version 2 only added the scanned_files table, which _SCHEMA creates.
             # Version 3 made clean_lyrics() remove prefixes, credits and placeholders.
             # Version 4 only added the shironet_queue and shironet_requests tables.
+            # Version 5 added the alt_artist and alt_title columns to shironet_queue.
+            # Version 6 added shironet_queue.retry_after and the artist, title and
+            # has_lyrics columns of scanned_files.
             if version < 3:
                 self.cleanup_counts = self._clean_stored_lyrics()
+            for table, column, declaration in (
+                ('shironet_queue', 'alt_artist', 'TEXT'),
+                ('shironet_queue', 'alt_title', 'TEXT'),
+                ('shironet_queue', 'retry_after', 'TEXT'),
+                ('scanned_files', 'artist', 'TEXT'),
+                ('scanned_files', 'title', 'TEXT'),
+                ('scanned_files', 'has_lyrics', 'INTEGER'),
+            ):
+                self._add_column_if_missing(table, column, declaration)
+            if version < 6:
+                self._set_missing_retry_times()
             if row is None or version < SCHEMA_VERSION:
                 self._conn.execute(
                     "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
                     (str(SCHEMA_VERSION),),
                 )
+
+    def _set_missing_retry_times(self) -> None:
+        # Misses and failures recorded before schema 6 have no retry time: give them the
+        # usual wait, counted from when they missed or failed.
+        rows = self._conn.execute(
+            "SELECT artist_key, title_key, status, updated_at FROM shironet_queue "
+            "WHERE status IN ('not_found', 'failed') AND retry_after IS NULL"
+        ).fetchall()
+        for artist_key, title_key, status, updated_at in rows:
+            hours = DEFAULT_MISS_TTL_HOURS if status == 'not_found' else FAILED_RETRY_HOURS
+            try:
+                retry = datetime.fromisoformat(updated_at) + timedelta(hours=hours)
+            except ValueError:
+                retry = datetime.now(timezone.utc)
+            self._conn.execute(
+                'UPDATE shironet_queue SET retry_after = ? WHERE artist_key = ? AND title_key = ?',
+                (iso_time(retry), artist_key, title_key),
+            )
+
+    def _add_column_if_missing(self, table: str, column: str, declaration: str) -> None:
+        # CREATE TABLE IF NOT EXISTS leaves an older table as it is, so new columns are added here.
+        columns = {row[1] for row in self._conn.execute(f'PRAGMA table_info({table})')}
+        if column not in columns:
+            self._conn.execute(f'ALTER TABLE {table} ADD COLUMN {column} {declaration}')
 
     def _clean_stored_lyrics(self) -> tuple[int, int]:
         """Apply clean_lyrics() to every stored row. Returns (updated, deleted)."""
@@ -391,22 +453,48 @@ class LyricsCache:
             results.append(self.put(artist, title, lyrics, SOURCE_EMBEDDED, source_ref, replace))
         return results
 
+    def scanned_file(self, path: str, mtime_ns: int, size: int) -> ScannedFile | None:
+        """What a previous read of the file found, when the file has not changed since.
+
+        None when the file was never read, changed since, or was read before schema 6
+        (which did not record whether the file had lyrics): it needs another read.
+        """
+        row = self._conn.execute(
+            'SELECT mtime_ns, size, artist, title, has_lyrics FROM scanned_files WHERE path = ?',
+            (normalize_path(path),),
+        ).fetchone()
+        if row is None or row[:2] != (mtime_ns, size) or row[4] is None:
+            return None
+        return ScannedFile(row[2] or '', row[3] or '', bool(row[4]))
+
     def is_scanned(self, path: str, mtime_ns: int, size: int) -> bool:
         """True when the file was read before and has not changed since."""
-        row = self._conn.execute(
-            'SELECT mtime_ns, size FROM scanned_files WHERE path = ?', (normalize_path(path),)
-        ).fetchone()
-        return row == (mtime_ns, size)
+        return self.scanned_file(path, mtime_ns, size) is not None
 
-    def mark_scanned(self, path: str, mtime_ns: int, size: int) -> None:
+    def mark_scanned(
+        self,
+        path: str,
+        mtime_ns: int,
+        size: int,
+        artist: str | None = None,
+        title: str | None = None,
+        has_lyrics: bool | None = None,
+    ) -> None:
         self._conn.execute(
-            'INSERT OR REPLACE INTO scanned_files (path, mtime_ns, size, scanned_at) VALUES (?, ?, ?, ?)',
-            (normalize_path(path), mtime_ns, size, _now()),
+            'INSERT OR REPLACE INTO scanned_files (path, mtime_ns, size, scanned_at, artist, title, has_lyrics) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?)',
+            (normalize_path(path), mtime_ns, size, _now(), artist, title,
+             None if has_lyrics is None else int(has_lyrics)),
         )
 
     def count(self) -> int:
         return self._conn.execute('SELECT COUNT(*) FROM lyrics').fetchone()[0]
 
 
+def iso_time(moment: datetime) -> str:
+    """UTC time as stored in the cache. Stored times compare correctly as strings."""
+    return moment.astimezone(timezone.utc).isoformat(timespec='seconds')
+
+
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec='seconds')
+    return iso_time(datetime.now(timezone.utc))

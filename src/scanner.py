@@ -1,7 +1,10 @@
-"""Scan a folder and store the lyrics embedded in its audio files.
+"""Scan a folder: store the lyrics embedded in its audio files, and queue the
+Hebrew songs that have none for the Shironet worker.
 
 A file is read again only when its size or modification time changed since the
-last scan, so a rescan of a large library is quick. No Picard or Qt imports.
+last scan, so a rescan of a large library is quick. What each read found (artist,
+title, lyrics or not) is recorded, so unchanged files without lyrics are queued
+from the database. No Picard or Qt imports.
 """
 
 from __future__ import annotations
@@ -11,6 +14,7 @@ from dataclasses import dataclass, field
 import os
 
 from .lyrics_cache import LyricsCache, PutResult, is_hebrew_song
+from . import shironet_queue as queue
 
 
 # Files read before their results are written in one transaction. Tags are read
@@ -32,6 +36,7 @@ class ScanStats:
     replaced: int = 0
     conflicts: int = 0
     skipped: int = 0
+    queued: int = 0
     errors: int = 0
     error_samples: list[tuple[str, str]] = field(default_factory=list)
     conflict_files: list[str] = field(default_factory=list)
@@ -59,8 +64,10 @@ def scan_folder(
     extensions: frozenset[str],
     progress: Callable[[int, int], None] | None = None,
     should_stop: Callable[[], bool] | None = None,
+    queue_missing: bool = True,
 ) -> ScanStats:
-    """Store the lyrics of new and changed Hebrew songs under `root`.
+    """Store the lyrics of new and changed Hebrew songs under `root`, and queue the
+    Hebrew songs without lyrics (new, changed or unchanged files) for Shironet.
 
     `read_tags(path)` returns an object with `artist`, `title` and `lyrics`, or
     None for an unsupported file. Exceptions it raises are counted as errors,
@@ -70,7 +77,8 @@ def scan_folder(
     paths = list(find_audio_files(root, extensions))
     stats.found = len(paths)
 
-    pending = []
+    read_files = []  # (path, stat, tags) to store
+    missing = []  # (artist, title) of unchanged files without lyrics
     for index, path in enumerate(paths, start=1):
         if should_stop and should_stop():
             stats.cancelled = True
@@ -80,8 +88,11 @@ def scan_folder(
         except OSError as exc:
             _record_error(stats, path, exc)
             continue
-        if cache.is_scanned(path, st.st_mtime_ns, st.st_size):
+        known = cache.scanned_file(path, st.st_mtime_ns, st.st_size)
+        if known is not None:
             stats.unchanged += 1
+            if queue_missing and not known.has_lyrics:
+                missing.append((known.artist, known.title))
         else:
             try:
                 tags = read_tags(path)
@@ -89,32 +100,46 @@ def scan_folder(
                 _record_error(stats, path, exc)
             else:
                 stats.read += 1
-                pending.append((path, st, tags))
-        if len(pending) >= BATCH_SIZE:
-            _write(cache, pending, stats)
+                read_files.append((path, st, tags))
+        if len(read_files) + len(missing) >= BATCH_SIZE:
+            _write(cache, read_files, missing, stats, queue_missing)
         if progress:
             progress(index, stats.found)
 
-    _write(cache, pending, stats)
+    _write(cache, read_files, missing, stats, queue_missing)
     return stats
 
 
-def _write(cache: LyricsCache, pending: list, stats: ScanStats) -> None:
-    if not pending:
+def _write(cache: LyricsCache, read_files: list, missing: list, stats: ScanStats, queue_missing: bool) -> None:
+    if not read_files and not missing:
         return
     with cache.batch():
-        for path, st, tags in pending:
-            if tags is not None and tags.lyrics:
+        for path, st, tags in read_files:
+            artist = getattr(tags, 'artist', None)
+            title = getattr(tags, 'title', None)
+            lyrics = getattr(tags, 'lyrics', None)
+            if lyrics:
                 stats.with_lyrics += 1
-                if is_hebrew_song(tags.artist, tags.title, lyrics=tags.lyrics):
-                    results = cache.put_file_lyrics([(tags.artist, tags.title)], tags.lyrics, path)
+                if is_hebrew_song(artist, title, lyrics=lyrics):
+                    results = cache.put_file_lyrics([(artist, title)], lyrics, path)
                     stats.count(results)
                     if PutResult.CONFLICT in results:
                         stats.conflict_files.append(path)
                 else:
                     stats.not_hebrew += 1
-            cache.mark_scanned(path, st.st_mtime_ns, st.st_size)
-    pending.clear()
+            elif tags is not None and queue_missing:
+                _queue(cache, artist, title, stats)
+            # An unknown format counts as "no lyrics": it has no name, so it is never queued.
+            cache.mark_scanned(path, st.st_mtime_ns, st.st_size, artist, title, bool(lyrics))
+        for artist, title in missing:
+            _queue(cache, artist, title, stats)
+    read_files.clear()
+    missing.clear()
+
+
+def _queue(cache: LyricsCache, artist: str | None, title: str | None, stats: ScanStats) -> None:
+    if artist and title and is_hebrew_song(artist, title) and queue.enqueue(cache, artist, title):
+        stats.queued += 1
 
 
 def format_summary(stats: ScanStats, folder: str, cache_count: int | None) -> str:
@@ -130,6 +155,7 @@ def format_summary(stats: ScanStats, folder: str, cache_count: int | None) -> st
         f'Conflicts (kept cached lyrics): {stats.conflicts}',
         f'Skipped (no artist or title): {stats.skipped}',
         f'Unreadable files: {stats.errors}',
+        f'Hebrew songs without lyrics, newly queued for Shironet: {stats.queued}',
         '',
         f'Cache now holds {"?" if cache_count is None else cache_count} songs.',
     ]

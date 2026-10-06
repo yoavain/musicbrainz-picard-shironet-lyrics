@@ -7,6 +7,7 @@ import _support
 _support.load_plugin_package()
 
 from shironet_lyrics.src.lyrics_cache import LyricsCache  # noqa: E402
+from shironet_lyrics.src import shironet_queue as queue  # noqa: E402
 from shironet_lyrics.src.scanner import ScanStats, format_summary, scan_folder  # noqa: E402
 
 
@@ -130,6 +131,39 @@ class ScanFolderTest(unittest.TestCase):
         self.assertIsNone(self.cache.get('R.E.M.', 'The One I Love'))
         self.assertIsNotNone(self.cache.get('Mashina', 'At Lo Kmo Kulam'))
         self.assertEqual(self.scan().unchanged, 2)
+
+    def test_hebrew_songs_without_lyrics_are_queued(self):
+        self.add_file('1.mp3', Tags(ARTIST, 'בלי מילים', ''))
+        self.add_file('2.mp3', Tags('R.E.M.', 'The One I Love', ''))  # not Hebrew
+        self.add_file('3.mp3', Tags(ARTIST, 'עם מילים', 'text'))  # has lyrics
+        self.add_file('4.mp3', None)  # unknown format
+
+        stats = self.scan()
+
+        self.assertEqual(stats.queued, 1)
+        self.assertEqual(queue.next_pending(self.cache).title, 'בלי מילים')
+
+    def test_unchanged_files_are_queued_from_the_database(self):
+        self.add_file('1.mp3', Tags(ARTIST, 'בלי מילים', ''))
+        self.scan()
+        self.cache.connection.execute('DELETE FROM shironet_queue')
+
+        stats = self.scan()
+
+        self.assertEqual(self.reader.calls, [])  # not read again
+        self.assertEqual((stats.unchanged, stats.queued), (1, 1))
+
+    def test_cached_or_queued_songs_are_not_queued_again(self):
+        self.add_file('1.mp3', Tags(ARTIST, 'שיר', 'text'))
+        self.add_file('2.mp3', Tags(ARTIST, 'שיר', ''))  # the same song, no lyrics in this copy
+        self.add_file('3.mp3', Tags(ARTIST, 'שיר אחר', ''))
+        self.assertEqual(self.scan().queued, 1)
+        self.assertEqual(self.scan().queued, 0)
+
+    def test_queueing_can_be_turned_off(self):
+        self.add_file('1.mp3', Tags(ARTIST, 'בלי מילים', ''))
+        self.assertEqual(self.scan(queue_missing=False).queued, 0)
+        self.assertIsNone(queue.next_pending(self.cache))
 
     def test_cancel_keeps_the_work_done(self):
         for number in range(5):

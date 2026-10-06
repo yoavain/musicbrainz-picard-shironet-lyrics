@@ -12,6 +12,7 @@ from shironet_lyrics.src.lyrics_cache import (  # noqa: E402
     SOURCE_EMBEDDED,
     LyricsCache,
     PutResult,
+    ScannedFile,
     clean_lyrics,
     embedded_lyrics,
     has_hebrew,
@@ -251,11 +252,17 @@ class LyricsCacheTest(unittest.TestCase):
 
     def test_scanned_files(self):
         self.assertFalse(self.cache.is_scanned('a.mp3', 100, 10))
-        self.cache.mark_scanned('a.mp3', 100, 10)
+        self.cache.mark_scanned('a.mp3', 100, 10, 'A', 'T', False)
         self.assertTrue(self.cache.is_scanned('a.mp3', 100, 10))
         self.assertTrue(self.cache.is_scanned(os.path.abspath('a.mp3'), 100, 10))
         self.assertFalse(self.cache.is_scanned('a.mp3', 101, 10))
         self.assertFalse(self.cache.is_scanned('a.mp3', 100, 11))
+        self.assertEqual(self.cache.scanned_file('a.mp3', 100, 10), ScannedFile('A', 'T', False))
+
+    def test_file_read_before_schema_6_needs_another_read(self):
+        # Records without has_lyrics come from older scans: they do not say whether to queue the song.
+        self.cache.mark_scanned('a.mp3', 100, 10)
+        self.assertIsNone(self.cache.scanned_file('a.mp3', 100, 10))
 
     def test_batch_rolls_back_on_error(self):
         with self.assertRaises(ValueError):
@@ -309,6 +316,55 @@ class LyricsCacheFileTest(unittest.TestCase):
         version = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0]
         conn.close()
         self.assertEqual(version, str(SCHEMA_VERSION))
+
+    def test_version_5_misses_get_a_retry_time(self):
+        LyricsCache(self.path).close()
+        conn = sqlite3.connect(self.path)
+        conn.executemany(
+            "INSERT INTO shironet_queue (artist_key, title_key, artist, title, purpose, status, added_at, updated_at) "
+            "VALUES (?, ?, ?, ?, 'fetch', ?, 'x', ?)",
+            [
+                ('a', 'miss', 'A', 'Miss', 'not_found', '2026-10-06T10:00:00+00:00'),
+                ('a', 'fail', 'A', 'Fail', 'failed', '2026-10-06T11:00:00+00:00'),
+                ('a', 'wait', 'A', 'Wait', 'pending', '2026-10-06T12:00:00+00:00'),
+            ],
+        )
+        conn.execute("UPDATE meta SET value = '5' WHERE key = 'schema_version'")
+        conn.commit()
+        conn.close()
+
+        LyricsCache(self.path).close()
+
+        conn = sqlite3.connect(self.path)
+        rows = dict(conn.execute('SELECT title, retry_after FROM shironet_queue').fetchall())
+        conn.close()
+        self.assertEqual(rows, {
+            'Miss': '2026-10-13T10:00:00+00:00',  # a week
+            'Fail': '2026-10-07T11:00:00+00:00',  # a day
+            'Wait': None,
+        })
+
+    def test_version_4_queue_gets_the_alternate_columns(self):
+        conn = sqlite3.connect(self.path)
+        conn.executescript(
+            "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+            "INSERT INTO meta VALUES ('schema_version', '4');"
+            "CREATE TABLE shironet_queue (artist_key TEXT NOT NULL, title_key TEXT NOT NULL,"
+            " artist TEXT NOT NULL, title TEXT NOT NULL, purpose TEXT NOT NULL, status TEXT NOT NULL,"
+            " attempts INTEGER NOT NULL DEFAULT 0, lyrics_url TEXT, result TEXT, added_at TEXT NOT NULL,"
+            " updated_at TEXT NOT NULL, PRIMARY KEY (artist_key, title_key)) WITHOUT ROWID;"
+            "INSERT INTO shironet_queue VALUES ('a', 't', 'A', 'T', 'fetch', 'pending', 0, NULL, NULL, 'x', 'x');"
+        )
+        conn.commit()
+        conn.close()
+        LyricsCache(self.path).close()
+        conn = sqlite3.connect(self.path)
+        columns = [row[1] for row in conn.execute('PRAGMA table_info(shironet_queue)')]
+        kept = conn.execute('SELECT artist, alt_artist FROM shironet_queue').fetchall()
+        conn.close()
+        self.assertIn('alt_artist', columns)
+        self.assertIn('alt_title', columns)
+        self.assertEqual(kept, [('A', None)])
 
     def test_version_2_database_is_cleaned(self):
         cache = LyricsCache(self.path)

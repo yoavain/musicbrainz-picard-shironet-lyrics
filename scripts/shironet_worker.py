@@ -4,9 +4,10 @@
     python scripts/shironet_worker.py enqueue-calibration 20
     python scripts/shironet_worker.py enqueue ARTIST TITLE
     python scripts/shironet_worker.py run [--max-requests N] [--hours H] [--notify] ...
-    python scripts/shironet_worker.py status
+    python scripts/shironet_worker.py status [--all-misses]
+    python scripts/shironet_worker.py requeue-not-found
 
-The queue, the request log and the learned pace live in the plugin's cache file
+Picard also queues the Hebrew songs it cannot find in the cache. The queue, the request log and the learned pace live in the plugin's cache file
 (--db picks another). Fetched lyrics go into the cache, where Picard finds them.
 Calibration songs are already cached: their fetched lyrics are only compared.
 
@@ -17,6 +18,7 @@ scan_folder.py; the other commands need only the standard library.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import os
 import signal
 import subprocess
@@ -28,7 +30,12 @@ from _bootstrap import DEFAULT_PICARD_EXE, default_db_path, load_mutagen, load_p
 
 load_plugin_package()
 
-from shironet_lyrics.src.lyrics_cache import SOURCE_EMBEDDED, LyricsCache, is_hebrew_song  # noqa: E402
+from shironet_lyrics.src.lyrics_cache import (  # noqa: E402
+    DEFAULT_MISS_TTL_HOURS,
+    SOURCE_EMBEDDED,
+    LyricsCache,
+    is_hebrew_song,
+)
 from shironet_lyrics.src import shironet_queue as queue  # noqa: E402
 from shironet_lyrics.src.shironet_worker import (  # noqa: E402
     PaceLimits,
@@ -40,6 +47,10 @@ from shironet_lyrics.src.shironet_worker import (  # noqa: E402
     run,
     save_pace,
 )
+
+
+# Songs not found that status lists without --all-misses.
+MISSES_SHOWN = 30
 
 
 def say(message: str) -> None:
@@ -160,9 +171,8 @@ def cmd_run(cache: LyricsCache, args) -> int:
             'To test clearing it, solve it at https://shironet.mako.co.il in your browser.',
         )
 
-    pending = queue.counts(cache)
-    total = sum(count for (purpose, status), count in pending.items() if status == queue.PENDING)
-    say(f'{total} songs pending. First wait {state.interval:.0f} s between requests. Ctrl+C stops.')
+    say(f'{queue.due_count(cache)} songs to fetch. First wait {state.interval:.0f} s between requests. '
+        'Ctrl+C stops.')
     stats = run(
         cache, client, pacer,
         sleep=sleep,
@@ -172,6 +182,7 @@ def cmd_run(cache: LyricsCache, args) -> int:
         should_stop=lambda: bool(stop),
         say=say,
         on_challenge=on_challenge,
+        miss_ttl_hours=args.miss_ttl_hours,
     )
     minutes = (time.time() - stats.started) / 60
     summary = (
@@ -184,6 +195,18 @@ def cmd_run(cache: LyricsCache, args) -> int:
     return 0
 
 
+def _local_time(stored: str) -> str:
+    try:
+        return datetime.fromisoformat(stored).astimezone().strftime('%Y-%m-%d %H:%M')
+    except ValueError:
+        return stored
+
+
+def cmd_requeue_not_found(cache: LyricsCache, args) -> int:
+    print(f'{queue.requeue(cache)} songs set back to pending.')
+    return 0
+
+
 def cmd_status(cache: LyricsCache, args) -> int:
     print('Queue:')
     counts = queue.counts(cache)
@@ -191,6 +214,8 @@ def cmd_status(cache: LyricsCache, args) -> int:
         print('  empty')
     for (purpose, status), count in sorted(counts.items()):
         print(f'  {purpose:<10} {status:<10} {count}')
+    if counts:
+        print(f'  due now (pending, or past their retry time): {queue.due_count(cache)}')
 
     state = load_pace(cache, PaceState())
     print(f'Pace: {state.interval:.0f} s between requests, next cooldown {state.cooldown / 60:.0f} min, '
@@ -203,6 +228,18 @@ def cmd_status(cache: LyricsCache, args) -> int:
         print(f'  stretch {number}: {ok} ok requests, median gap {gap_text}')
     for wait in report.recoveries:
         print(f'  unblocked {wait / 60:.0f} min after a CAPTCHA')
+
+    missed = queue.misses(cache)
+    if missed:
+        shown = missed if args.all_misses else missed[:MISSES_SHOWN]
+        print(f'Not found on Shironet: {len(missed)} songs. Fix the title in the tags if it is spelled '
+              f'differently on Shironet, then run enqueue-missing again.')
+        for artist, title, alt_artist, alt_title, result, retry_after in shown:
+            alternate = f'  (also tried: {alt_artist} - {alt_title})' if alt_title else ''
+            retry = f'; retry after {_local_time(retry_after)}' if retry_after else ''
+            print(f'  {artist} - {title}{alternate}  [{result}{retry}]')
+        if len(shown) < len(missed):
+            print(f'  ... {len(missed) - len(shown)} more; status --all-misses lists all of them')
 
     calibration = queue.results(cache, queue.PURPOSE_CALIBRATE)
     if calibration:
@@ -248,10 +285,16 @@ def main(argv: list[str] | None = None) -> int:
     runner.add_argument('--no-cookies', action='store_true', help='do not keep cookies between requests')
     runner.add_argument('--notify', action='store_true', help='Windows notification on a CAPTCHA and at the end')
     runner.add_argument('--ntfy-url', help='also push those notifications to this ntfy topic URL')
+    runner.add_argument('--miss-ttl-hours', type=float, default=DEFAULT_MISS_TTL_HOURS,
+                        help='hours before a song not found is searched again (default: %(default)s)')
     runner.set_defaults(handler=cmd_run)
 
-    status = commands.add_parser('status', help='queue, pace and calibration summary')
+    status = commands.add_parser('status', help='queue, pace, songs not found, calibration summary')
+    status.add_argument('--all-misses', action='store_true', help='list every song not found')
     status.set_defaults(handler=cmd_status)
+
+    requeue = commands.add_parser('requeue-not-found', help='set songs not found back to pending')
+    requeue.set_defaults(handler=cmd_requeue_not_found)
 
     args = parser.parse_args(argv)
     args.db = os.path.abspath(args.db)

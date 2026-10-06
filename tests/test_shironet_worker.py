@@ -85,6 +85,32 @@ class QueueTest(unittest.TestCase):
     def test_empty_names_are_not_queued(self):
         self.assertFalse(queue.enqueue(self.cache, '', TITLE))
 
+    def test_alternate_is_kept_only_when_it_differs(self):
+        queue.enqueue(self.cache, 'A', 'One', alternate=('a', 'One (Live)'))
+        self.assertEqual(queue.next_pending(self.cache).names(), [('A', 'One')])
+        queue.enqueue(self.cache, 'B', 'Two', alternate=('B', ''))
+        queue.enqueue(self.cache, 'C', 'Three', alternate=('Other', 'Three'))
+        rows = self.cache.connection.execute(
+            'SELECT artist, alt_artist, alt_title FROM shironet_queue ORDER BY artist'
+        ).fetchall()
+        self.assertEqual(rows, [('A', None, None), ('B', None, None), ('C', 'Other', 'Three')])
+
+    def test_song_cached_under_the_alternate_is_not_queued(self):
+        self.cache.put('Other', 'Three', 'text', SOURCE_EMBEDDED)
+        self.assertFalse(queue.enqueue(self.cache, 'C', 'Three', alternate=('Other', 'Three')))
+
+    def test_requeue_not_found(self):
+        queue.enqueue(self.cache, 'A', 'One')
+        item = queue.next_pending(self.cache)
+        queue.update(self.cache, item, status=queue.NOT_FOUND, lyrics_url='u', add_attempt=True,
+                     retry_after='2999-01-01T00:00:00+00:00')
+        self.assertEqual(len(queue.misses(self.cache)), 1)
+        self.assertIsNone(queue.next_pending(self.cache))
+        self.assertEqual(queue.requeue(self.cache), 1)
+        item = queue.next_pending(self.cache)
+        self.assertEqual((item.attempts, item.lyrics_url), (0, None))
+        self.assertEqual(queue.misses(self.cache), [])
+
     def test_next_pending_prefers_fewer_attempts(self):
         queue.enqueue(self.cache, 'A', 'One')
         queue.enqueue(self.cache, 'A', 'Two')
@@ -173,7 +199,67 @@ class ProcessItemTest(unittest.TestCase):
         queue.enqueue(self.cache, 'אמן אחר', TITLE)
         self.assertEqual(self.process(), queue.NOT_FOUND)
         self.assertEqual(len(self.client.urls), 1)
-        self.assertEqual(queue.results(self.cache, 'fetch')[0][3], 'no match in 10 results')
+        self.assertEqual(queue.results(self.cache, 'fetch')[0][3], f'no match in 10 results for "{TITLE}"')
+
+    def test_alternate_name_matches_on_the_same_page(self):
+        # File tags say an unknown artist; the MusicBrainz name is on Shironet's results page.
+        queue.enqueue(self.cache, 'אמן לא ידוע', TITLE, alternate=('עופרה חזה', TITLE))
+        self.assertEqual(self.process(), queue.DONE)
+        self.assertEqual(len(self.client.urls), 2)  # one search, one lyrics page
+        self.assertIn('prfid=820', self.client.urls[1])
+        # Stored under both names.
+        self.assertEqual(self.cache.get('אמן לא ידוע', TITLE).lyrics, FIXTURE_LYRICS)
+        self.assertEqual(self.cache.get('עופרה חזה', TITLE).lyrics, FIXTURE_LYRICS)
+
+    def test_alternate_title_gets_its_own_search(self):
+        empty = '<html><body></body></html>'
+        queue.enqueue(self.cache, ARTIST, 'כותרת אחרת', alternate=(ARTIST, TITLE))
+        self.client.scripted = [Response(OK, 200, empty)]  # the first search finds nothing
+        self.assertEqual(self.process(), queue.DONE)
+        self.assertEqual(len(self.client.urls), 3)
+        self.assertIn('searchSongs', self.client.urls[1])
+        self.assertEqual(self.cache.get(ARTIST, 'כותרת אחרת').lyrics, FIXTURE_LYRICS)
+
+    def test_alternate_miss_reports_both_searches(self):
+        empty = '<html><body></body></html>'
+        queue.enqueue(self.cache, 'אמן', 'כותרת', alternate=('אמן', 'כותרת שנייה'))
+        self.client.scripted = [Response(OK, 200, empty), Response(OK, 200, empty)]
+        self.assertEqual(self.process(), queue.NOT_FOUND)
+        self.assertEqual(
+            queue.misses(self.cache),
+            [('אמן', 'כותרת', 'אמן', 'כותרת שנייה',
+              'no match in 0 results for "כותרת"; 0 results for "כותרת שנייה"',
+              '1970-01-08T00:00:00+00:00')],  # the test clock is 0: retry a week later
+        )
+
+    def test_a_miss_waits_for_its_retry_time(self):
+        queue.enqueue(self.cache, 'אמן אחר', TITLE)
+        self.assertEqual(self.process(), queue.NOT_FOUND)
+        self.assertIsNone(queue.next_pending(self.cache, '1970-01-07T23:59:59+00:00'))
+        self.assertEqual(queue.due_count(self.cache, '1970-01-07T23:59:59+00:00'), 0)
+        retry = queue.next_pending(self.cache, '1970-01-08T00:00:00+00:00')
+        self.assertEqual(retry.artist, 'אמן אחר')
+
+    def test_pending_songs_come_before_due_misses(self):
+        queue.enqueue(self.cache, 'אמן אחר', TITLE)
+        self.process()  # not found, retry at 1970-01-08
+        queue.enqueue(self.cache, ARTIST, TITLE)
+        self.assertEqual(queue.next_pending(self.cache, '2000-01-01T00:00:00+00:00').artist, ARTIST)
+        self.assertEqual(queue.due_count(self.cache, '2000-01-01T00:00:00+00:00'), 2)
+
+    def test_failed_song_gets_a_retry_time(self):
+        queue.enqueue(self.cache, ARTIST, TITLE)
+        for _ in range(MAX_ATTEMPTS):
+            self.client.scripted = [Response(ERROR, 500, detail='500')]
+            self.process()
+        row = self.cache.connection.execute('SELECT status, retry_after FROM shironet_queue').fetchone()
+        self.assertEqual(row, ('failed', '1970-01-02T00:00:00+00:00'))  # errors: 24 h, not a week
+
+    def test_custom_miss_ttl(self):
+        queue.enqueue(self.cache, 'אמן אחר', TITLE)
+        item = queue.next_pending(self.cache)
+        process_item(self.cache, self.client, self.pacer, item, lambda: None, lambda: 0.0, miss_ttl_hours=1)
+        self.assertEqual(queue.misses(self.cache)[0][5], '1970-01-01T01:00:00+00:00')
 
     def test_challenge_on_lyrics_keeps_the_url_and_no_attempt(self):
         queue.enqueue(self.cache, ARTIST, TITLE)

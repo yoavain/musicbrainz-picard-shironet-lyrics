@@ -18,7 +18,8 @@ Artist and title are matched loosely: niqqud, punctuation, "feat." parts and ver
 suffixes such as "(Live)" are ignored.
 
 - When a file without lyrics is matched to a track, its **Lyrics** tag is filled from the
-  cache. Right-click > **Shironet Lyrics > Lookup Lyrics** does it on demand.
+  cache. Right-click > **Shironet Lyrics > Lookup Lyrics** does it on demand. Hebrew songs
+  that are not cached are queued for the Shironet worker.
 
 Missing lyrics are fetched from Shironet by a separate command-line worker
 (`scripts/shironet_worker.py`), slowly, because Shironet blocks fast automated access.

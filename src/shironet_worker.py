@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 import difflib
 import http.cookiejar
 import json
@@ -22,7 +23,14 @@ import time
 import urllib.error
 import urllib.request
 
-from .lyrics_cache import SOURCE_SHIRONET, LyricsCache
+from .lyrics_cache import (
+    DEFAULT_MISS_TTL_HOURS,
+    FAILED_RETRY_HOURS,
+    SOURCE_SHIRONET,
+    LyricsCache,
+    iso_time,
+    normalize,
+)
 from .shironet import is_challenge, parse_lyrics_page, parse_search, pick_result, search_url
 from .shironet_queue import (
     DONE,
@@ -180,11 +188,18 @@ def _request(cache, client, pacer, kind, url, clock) -> Response:
     return response
 
 
-def _failed_attempt(cache: LyricsCache, item: QueueItem, response: Response) -> str:
+def _retry_time(clock: Callable[[], float], hours: float) -> str:
+    return iso_time(datetime.fromtimestamp(clock() + hours * 3600, timezone.utc))
+
+
+def _failed_attempt(cache, item, response, clock) -> str:
     if response.outcome == CHALLENGE:
         return CHALLENGE  # not the song's fault: no attempt counted
-    status = FAILED if item.attempts + 1 >= MAX_ATTEMPTS else None
-    update(cache, item, status=status, result=response.detail or 'error', add_attempt=True)
+    if item.attempts + 1 >= MAX_ATTEMPTS:
+        update(cache, item, status=FAILED, result=response.detail or 'error', add_attempt=True,
+               retry_after=_retry_time(clock, FAILED_RETRY_HOURS))
+    else:
+        update(cache, item, result=response.detail or 'error', add_attempt=True)
     return ERROR
 
 
@@ -195,18 +210,36 @@ def process_item(
     item: QueueItem,
     before_request: Callable[[], None],
     clock: Callable[[], float] = time.time,
+    miss_ttl_hours: float = DEFAULT_MISS_TTL_HOURS,
 ) -> str:
-    """Fetch one song. Returns DONE, NOT_FOUND, CHALLENGE or ERROR."""
+    """Fetch one song. Returns DONE, NOT_FOUND, CHALLENGE or ERROR.
+
+    A song not found gets a retry time `miss_ttl_hours` ahead (a week by default);
+    a song failed after MAX_ATTEMPTS errors, FAILED_RETRY_HOURS ahead.
+    next_pending() skips it until then.
+
+    The song's names (primary, then alternate) are each matched exactly against the
+    search results. The search uses the primary title; the alternate title gets its
+    own search only when it differs and the first search found no match.
+    """
+    names = item.names()
     url = item.lyrics_url
     if not url:
-        before_request()
-        response = _request(cache, client, pacer, 'search', search_url(item.title), clock)
-        if response.outcome != OK:
-            return _failed_attempt(cache, item, response)
-        found = parse_search(response.text)
-        match = pick_result(found, item.artist, item.title)
+        searched = []
+        match = None
+        for title in _distinct_titles(names):
+            before_request()
+            response = _request(cache, client, pacer, 'search', search_url(title), clock)
+            if response.outcome != OK:
+                return _failed_attempt(cache, item, response, clock)
+            found = parse_search(response.text)
+            searched.append(f'{len(found)} results for "{title}"')
+            match = next(filter(None, (pick_result(found, artist, name) for artist, name in names)), None)
+            if match is not None:
+                break
         if match is None:
-            update(cache, item, status=NOT_FOUND, result=f'no match in {len(found)} results', add_attempt=True)
+            update(cache, item, status=NOT_FOUND, result='no match in ' + '; '.join(searched), add_attempt=True,
+                   retry_after=_retry_time(clock, miss_ttl_hours))
             return NOT_FOUND
         url = match.url
         update(cache, item, lyrics_url=url)
@@ -214,20 +247,32 @@ def process_item(
     before_request()
     response = _request(cache, client, pacer, 'lyrics', url, clock)
     if response.outcome != OK:
-        return _failed_attempt(cache, item, response)
+        return _failed_attempt(cache, item, response, clock)
     page = parse_lyrics_page(response.text)
     if page is None:
-        update(cache, item, status=NOT_FOUND, result='no lyrics on the page', add_attempt=True)
+        update(cache, item, status=NOT_FOUND, result='no lyrics on the page', add_attempt=True,
+               retry_after=_retry_time(clock, miss_ttl_hours))
         return NOT_FOUND
 
     if item.purpose == PURPOSE_CALIBRATE:
-        cached = cache.get(item.artist, item.title)
+        cached = cache.lookup(names)
         ratio = similarity(cached.lyrics, page.lyrics) if cached else 0.0
         update(cache, item, status=DONE, result=f'similarity {ratio:.2f}', add_attempt=True)
     else:
-        stored = cache.put(item.artist, item.title, page.lyrics, SOURCE_SHIRONET, url)
-        update(cache, item, status=DONE, result=stored.value, add_attempt=True)
+        # Under every name, so Picard finds the lyrics by the file's tags or the MusicBrainz name.
+        stored = [cache.put(artist, title, page.lyrics, SOURCE_SHIRONET, url) for artist, title in names]
+        update(cache, item, status=DONE, result=', '.join(result.value for result in stored), add_attempt=True)
     return DONE
+
+
+def _distinct_titles(names: list[tuple[str, str]]) -> list[str]:
+    titles, seen = [], set()
+    for _, title in names:
+        key = normalize(title)
+        if key and key not in seen:
+            seen.add(key)
+            titles.append(title)
+    return titles
 
 
 def similarity(a: str, b: str) -> float:
@@ -261,8 +306,9 @@ def run(
     should_stop: Callable[[], bool] = lambda: False,
     say: Callable[[str], None] = lambda message: None,
     on_challenge: Callable[[float], None] = lambda wait: None,
+    miss_ttl_hours: float = DEFAULT_MISS_TTL_HOURS,
 ) -> RunStats:
-    """Process pending songs until the queue is empty or a limit is reached."""
+    """Process due songs until none is left or a limit is reached."""
     stats = RunStats(started=clock())
     first_request = True
 
@@ -283,12 +329,12 @@ def run(
         if max_seconds is not None and clock() - stats.started >= max_seconds:
             stats.stopped_because = 'time limit'
             break
-        item = next_pending(cache)
+        item = next_pending(cache, iso_time(datetime.fromtimestamp(clock(), timezone.utc)))
         if item is None:
             stats.stopped_because = 'queue empty'
             break
 
-        outcome = process_item(cache, client, pacer, item, before_request, clock)
+        outcome = process_item(cache, client, pacer, item, before_request, clock, miss_ttl_hours)
         save_pace(cache, pacer.state)
         if outcome == DONE:
             stats.done += 1

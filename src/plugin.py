@@ -13,6 +13,7 @@ from picard.plugin3.api import BaseAction, PluginApi, Track
 
 from .lyrics_cache import Entry, LyricsCache, PutResult, embedded_lyrics, is_hebrew_song
 from .scanner import ScanStats, format_summary, scan_folder
+from . import shironet_queue as queue
 from .tag_reader import AUDIO_EXTENSIONS, read_tags
 
 
@@ -63,7 +64,12 @@ def _store_file(file, replace: bool = False) -> None:
                         'Lyrics cache: %s has lyrics that differ from the cached ones; kept the cached ones',
                         file.filename,
                     )
-            _cache.mark_scanned(file.filename, st.st_mtime_ns, st.st_size)
+            # Recorded like the folder scan does, so the scan neither re-reads this file
+            # nor misses that it has no lyrics.
+            _cache.mark_scanned(
+                file.filename, st.st_mtime_ns, st.st_size,
+                file.orig_metadata.get('artist'), file.orig_metadata.get('title'), bool(lyrics),
+            )
     except sqlite3.Error as exc:
         _api.logger.error('Lyrics cache: cannot store lyrics from %s: %s', file.filename, exc)
 
@@ -114,12 +120,30 @@ def _set_lyrics(file, lyrics: str) -> None:
     file.update()
 
 
+def _queue_for_shironet(file) -> bool:
+    """Queue a Hebrew song that missed the cache, for scripts/shironet_worker.py.
+
+    The file's own artist and title are the primary name: they are what the user
+    edits when a title is spelled differently on Shironet. The matched MusicBrainz
+    name, when it differs, is a second exact name to try.
+    """
+    own = (file.orig_metadata.get('artist'), file.orig_metadata.get('title'))
+    matched = (file.metadata.get('artist'), file.metadata.get('title'))
+    language = file.metadata.get('language') or file.orig_metadata.get('language')
+    if not is_hebrew_song(*own, *matched, language=language):
+        return False
+    if all(own):
+        return queue.enqueue(_cache, *own, alternate=matched)
+    return queue.enqueue(_cache, *matched)
+
+
 def _on_file_added_to_track(api: PluginApi, track, file) -> None:
-    """Fill missing lyrics from the cache when a file is matched to a track."""
+    """Fill missing lyrics from the cache when a file is matched to a track; queue a miss."""
     if _cache is None or embedded_lyrics(file.metadata):
         return
     try:
         entry = _lookup(file)
+        queued = entry is None and _queue_for_shironet(file)
     except sqlite3.Error as exc:
         api.logger.error('Lyrics cache: lookup failed for %s: %s', file.filename, exc)
         return
@@ -128,6 +152,8 @@ def _on_file_added_to_track(api: PluginApi, track, file) -> None:
         api.logger.info(
             'Lyrics cache: filled lyrics for %s from "%s - %s"', file.filename, entry.artist, entry.title
         )
+    elif queued:
+        api.logger.info('Lyrics cache: %s is not cached; queued for Shironet', file.filename)
 
 
 class LookupAction(BaseAction):
@@ -147,13 +173,14 @@ class LookupAction(BaseAction):
             for file in obj.iterfiles():
                 files[file.filename] = file
 
-        filled = replaced = same = 0
+        filled = replaced = same = queued = 0
         not_found = []
         try:
             for file in files.values():
                 entry = _lookup(file)
                 if entry is None:
                     not_found.append(file)
+                    queued += _queue_for_shironet(file)
                     continue
                 current = embedded_lyrics(file.metadata)
                 if current == entry.lyrics:
@@ -178,8 +205,10 @@ class LookupAction(BaseAction):
             f'Files: {len(files)}\n'
             f'Filled: {filled}, replaced different lyrics: {replaced}\n'
             f'Already the cached lyrics: {same}\n'
-            f'Not in the cache: {len(not_found)}'
+            f'Not in the cache: {len(not_found)}, newly queued for Shironet: {queued}'
         )
+        if queued:
+            summary += '\nRun scripts/shironet_worker.py run to fetch the queued songs.'
         if filled or replaced:
             summary += '\n\nNothing is written to the files until you save them.'
         if not_found:
@@ -292,6 +321,8 @@ def _report_scan(api: PluginApi, folder: str, result) -> None:
     summary = format_summary(stats, folder, _cache.count() if _cache else None)
     if stats.conflicts or stats.errors:
         summary += '\nThe log names the files with conflicts or read errors.'
+    if stats.queued:
+        summary += '\nRun scripts/shironet_worker.py run to fetch the queued songs.'
     api.logger.info('Lyrics cache: %s', summary.replace('\n\n', ' | ').replace('\n', ', '))
     QMessageBox.information(None, PLUGIN_NAME, summary)
 
