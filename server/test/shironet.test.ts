@@ -1,7 +1,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  BASE_URL, interpretLyrics, interpretSearch, isChallengeUrl, isLyricsUrl, pickResult, searchQuery,
+  BASE_URL, interpretLyrics, interpretSearch, isChallengeUrl, isLyricsUrl, nextPageUrl, pickResult, searchQuery,
   searchUrl, workId,
 } from '../src/shironet.ts';
 import type { ExtractedPage, SearchResult } from '../src/shironet.ts';
@@ -80,6 +80,19 @@ describe('interpretSearch', () => {
   });
   test('a link without href is skipped', () => {
     assert.deepEqual(interpretSearch(page({ links: [{ text: 'x', href: null }, { text: 'y', href: null }] })), []);
+  });
+});
+
+describe('nextPageUrl', () => {
+  test('resolves the next-page link against the search page', () => {
+    const p = page({ url: `${BASE_URL}/searchSongs?q=x&type=lyrics`, nextPageHref: '?q=x&type=lyrics&page=2' });
+    assert.equal(nextPageUrl(p), `${BASE_URL}/searchSongs?q=x&type=lyrics&page=2`);
+  });
+  test('no link, a link off Shironet, or a malformed link gives null', () => {
+    assert.equal(nextPageUrl(page({})), null);
+    assert.equal(nextPageUrl(page({ nextPageHref: null })), null);
+    assert.equal(nextPageUrl(page({ nextPageHref: 'https://evil.example/searchSongs?page=2' })), null);
+    assert.equal(nextPageUrl(page({ nextPageHref: 'http://[::1' })), null);
   });
 });
 

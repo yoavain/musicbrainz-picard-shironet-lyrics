@@ -10,9 +10,9 @@ import * as queue from '../src/queue.ts';
 const NOW = new Date(Date.UTC(2026, 9, 7, 12));
 const LYRICS_URL = `${BASE_URL}/artist?type=lyrics&lang=1&prfid=578&wrkid=3005`;
 
-function searchPage(pairs: Array<[string, string, string]>): RequestResult {
+function searchPage(pairs: Array<[string, string, string]>, nextPageHref: string | null = null): RequestResult {
   const links = pairs.flatMap(([title, artist, href]) => [{ text: title, href }, { text: artist, href: '/artist?lang=1&prfid=1' }]);
-  return { outcome: 'ok', page: { url: `${BASE_URL}/searchSongs`, title: '', challenge: false, links, lyrics: null } };
+  return { outcome: 'ok', page: { url: `${BASE_URL}/searchSongs`, title: '', challenge: false, links, lyrics: null, nextPageHref } };
 }
 function lyricsPage(text: string): RequestResult {
   const page: ExtractedPage = { url: LYRICS_URL, title: '', challenge: false, links: [], lyrics: { song: 'שיר לשלום', singer: 'להקת הנח"ל', text } };
@@ -71,6 +71,28 @@ describe('processSong', () => {
     const after = queue.find(store, [row])!;
     assert.equal(after.status, 'not_found');
     assert.equal(after.retryAfter, '2026-10-14T12:00:00+00:00');
+  });
+  test('a song on page 2 is found by following the next page', async () => {
+    const row = queued('יהודה פוליקר', 'כשתגדל');
+    const polikar = `${BASE_URL}/artist?type=lyrics&lang=1&prfid=459&wrkid=1796`;
+    const { calls, request } = script({
+      [searchUrl('כשתגדל')]: searchPage([['כשתגדל', 'אייל גולן', '/artist?type=lyrics&lang=1&prfid=92&wrkid=38593']], '?q=a&type=lyrics&page=2'),
+      [`${BASE_URL}/searchSongs?q=a&type=lyrics&page=2`]: searchPage([['כשתגדל', 'יהודה פוליקר', '/artist?type=lyrics&lang=1&prfid=459&wrkid=1796']]),
+      [polikar]: lyricsPage('שורה'),
+    });
+    assert.equal(await processSong(store, row, request, DEFAULT_RULES, () => NOW), 'done');
+    assert.deepEqual(calls.map((c) => c[0]), ['search', 'search', 'lyrics']);
+    assert.equal(queue.find(store, [row])?.lyricsUrl, polikar);
+  });
+  test('paging stops at the page limit and the note says how far it looked', async () => {
+    const row = queued('אמן', 'שיר');
+    const { calls, request } = script({
+      [searchUrl('שיר')]: searchPage([['שיר', 'אחר', '/artist?type=lyrics&wrkid=1']], '?q=a&page=2'),
+      [`${BASE_URL}/searchSongs?q=a&page=2`]: searchPage([['שיר', 'עוד אחד', '/artist?type=lyrics&wrkid=2']], '?q=a&page=3'),
+    });
+    assert.equal(await processSong(store, row, request, { ...DEFAULT_RULES, maxSearchPages: 2 }, () => NOW), 'not_found');
+    assert.equal(calls.length, 2);
+    assert.match(String((store.db.prepare('SELECT result FROM queue').get() as { result: string }).result), /2 results on 2 pages for "שיר"/);
   });
   test('a challenge counts no attempt and stores nothing', async () => {
     const row = queued('אמן', 'שיר');

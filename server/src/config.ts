@@ -17,10 +17,11 @@ export interface BrowserConfig {
   maxAgeMinutes: number;
   maxPages: number;
   maxMemoryMb: number;
+  maxMemoryGrowth: number;
 }
 
 export type WorkerConfig = Pick<WorkerOptions,
-  'missTtlHours' | 'failedRetryHours' | 'maxAttempts' | 'calibrationEvery' | 'calibrationGapDays'
+  'missTtlHours' | 'failedRetryHours' | 'maxAttempts' | 'maxSearchPages' | 'calibrationEvery' | 'calibrationGapDays'
   | 'calibrationAlertMedian' | 'requestLogDays'>;
 
 export interface Config {
@@ -125,7 +126,8 @@ export function loadConfig(
     idleMinutes: num(browserFile, 'browser', 'idleMinutes', 10, 1, 24 * 60),
     maxAgeMinutes: num(browserFile, 'browser', 'maxAgeMinutes', 60, 1, 24 * 60),
     maxPages: num(browserFile, 'browser', 'maxPages', 200, 1, 100_000, true),
-    maxMemoryMb: num(browserFile, 'browser', 'maxMemoryMb', 600, 100, 64_000),
+    maxMemoryMb: num(browserFile, 'browser', 'maxMemoryMb', 2000, 100, 64_000),
+    maxMemoryGrowth: num(browserFile, 'browser', 'maxMemoryGrowth', 2, 1.2, 20),
   };
 
   const paceFile = section(file, 'pace');
@@ -137,6 +139,7 @@ export function loadConfig(
     missTtlHours: num(workerFile, 'worker', 'missTtlHours', 168, 1, 24 * 365),
     failedRetryHours: num(workerFile, 'worker', 'failedRetryHours', 24, 1, 24 * 365),
     maxAttempts: num(workerFile, 'worker', 'maxAttempts', 5, 1, 100, true),
+    maxSearchPages: num(workerFile, 'worker', 'maxSearchPages', 5, 1, 20, true),
     calibrationEvery: num(workerFile, 'worker', 'calibrationEvery', 50, 0, 100_000, true),
     calibrationGapDays: num(workerFile, 'worker', 'calibrationGapDays', 90, 1, 3650),
     calibrationAlertMedian: num(workerFile, 'worker', 'calibrationAlertMedian', 0.8, 0, 1),

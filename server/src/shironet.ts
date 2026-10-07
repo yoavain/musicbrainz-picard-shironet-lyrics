@@ -22,6 +22,8 @@ export interface ExtractedPage {
   links: ExtractedLink[];
   /** null when the page has no span.artist_lyrics_text. */
   lyrics: { song: string; singer: string; text: string } | null;
+  /** The href of the search page's "next" link (a.search_nav_bar "הבא"), as written; absent on other pages. */
+  nextPageHref?: string | null;
 }
 
 export interface SearchResult {
@@ -71,6 +73,18 @@ export function workId(url: string): string | null {
 export function isChallengeUrl(url: string | null | undefined): boolean {
   const host = url ? parseUrl(url)?.hostname ?? '' : '';
   return host === CHALLENGE_HOST || host.endsWith(`.${CHALLENGE_HOST}`);
+}
+
+/** The absolute URL of the next search page, or null. Only Shironet URLs are followed. */
+export function nextPageUrl(page: ExtractedPage): string | null {
+  if (!page.nextPageHref) return null;
+  let next: URL;
+  try {
+    next = new URL(page.nextPageHref, page.url);
+  } catch {
+    return null;
+  }
+  return next.hostname === HOST || next.hostname.endsWith(`.${HOST}`) ? next.toString() : null;
 }
 
 /** Song results of a search page, in page order. */

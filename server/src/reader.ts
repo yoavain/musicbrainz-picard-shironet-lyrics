@@ -101,7 +101,10 @@ export interface ReaderLimits {
   idleMs: number;
   maxAgeMs: number;
   maxPages: number;
+  /** Hard ceiling for the browser's private memory. */
   maxMemoryBytes: number;
+  /** Recycle when memory reaches this many times the session's first reading. */
+  maxMemoryGrowth: number;
   humanPollMs: number;
   memoryCheckMs: number;
 }
@@ -126,6 +129,7 @@ export class ChromeReader implements PageReader {
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private memoryTimer: ReturnType<typeof setInterval> | null = null;
   private lastMemory: number | null = null;
+  private memoryBaseline: number | null = null;
   private lastClose: { reason: string; how: string } | null = null;
   private closing: Promise<void> | null = null;
 
@@ -212,6 +216,7 @@ export class ChromeReader implements PageReader {
     this.pages = 0;
     this.recycleReason = null;
     this.lastMemory = null;
+    this.memoryBaseline = null;
     this.memoryTimer = setInterval(() => { void this.checkMemory(); }, this.limits.memoryCheckMs);
     this.memoryTimer.unref?.();
   }
@@ -220,9 +225,17 @@ export class ChromeReader implements PageReader {
     const session = this.session;
     if (!session) return;
     try {
-      this.lastMemory = await session.memoryBytes();
-      if (this.lastMemory !== null && this.lastMemory > this.limits.maxMemoryBytes) {
-        this.recycleReason = `memory limit (${Math.round(this.lastMemory / 1024 / 1024)} MB)`;
+      const memory = await session.memoryBytes();
+      this.lastMemory = memory;
+      if (memory === null) return;
+      // A fresh browser's size depends on the machine; growth against the session's own
+      // first reading is what shows a leak. The ceiling is a backstop.
+      this.memoryBaseline ??= memory;
+      const mb = (bytes: number) => Math.round(bytes / 1024 / 1024);
+      if (memory > this.limits.maxMemoryBytes) {
+        this.recycleReason = `memory limit (${mb(memory)} MB)`;
+      } else if (memory >= this.memoryBaseline * this.limits.maxMemoryGrowth) {
+        this.recycleReason = `memory growth (${mb(memory)} MB, started at ${mb(this.memoryBaseline)} MB)`;
       }
     } catch (error) {
       this.log.warn({ err: error }, 'cannot read browser memory');

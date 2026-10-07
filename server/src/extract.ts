@@ -26,6 +26,8 @@ export const EXTRACT_SOURCE = `(() => {
   // Every real Shironet page (the home page too) loads the bot-manager script, so the
   // script alone is no sign of a challenge; a page with Shironet's own title is not one.
   const shironetTitle = document.title.includes('שירונט');
+  // Search pages show 10 results; the paging bar ends with a "הבא >>" (next) link.
+  const nextLink = [...document.querySelectorAll('a.search_nav_bar')].find((a) => a.textContent.includes('הבא'));
   return {
     url: location.href,
     title: document.title,
@@ -33,6 +35,7 @@ export const EXTRACT_SOURCE = `(() => {
       || /radware/i.test(document.title)
       || (html.includes('perfdrive.com') && !hasContent && !shironetTitle),
     links: links.map((a) => ({ text: textOf(a), href: a.getAttribute('href') })),
+    nextPageHref: nextLink ? nextLink.getAttribute('href') : null,
     lyrics: lyricsElement ? {
       song: textOf(document.querySelector('h1.artist_song_name_txt')),
       singer: textOf(document.querySelector('a.artist_singer_title')),

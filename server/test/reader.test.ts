@@ -30,7 +30,7 @@ class FakeSession implements BrowserSession {
   async close(reason: string) { this.closedWith = reason; return { how: 'clean' as const }; }
 }
 
-const LIMITS: ReaderLimits = { idleMs: 60_000, maxAgeMs: 3_600_000, maxPages: 3, maxMemoryBytes: 1000, humanPollMs: 10, memoryCheckMs: 60_000 };
+const LIMITS: ReaderLimits = { idleMs: 60_000, maxAgeMs: 3_600_000, maxPages: 3, maxMemoryBytes: 1000, maxMemoryGrowth: 2, humanPollMs: 10, memoryCheckMs: 60_000 };
 
 describe('ChromeReader', () => {
   let reader: ChromeReader | null = null;
@@ -104,7 +104,27 @@ describe('ChromeReader', () => {
     assert.equal(r.isOpen(), false);
     assert.match(FakeSession.opened[0].closedWith ?? '', /idle/);
   });
-  test('recycles when memory passes the limit', async () => {
+  test('a high but steady reading does not recycle', async () => {
+    const r = make({ memoryCheckMs: 10, maxMemoryBytes: 100_000 });
+    await r.read('https://shironet.mako.co.il/a', signal());
+    FakeSession.opened[0].memory = 900; // the first reading of the session is the baseline
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    FakeSession.opened[0].memory = 1000;
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    await r.read('https://shironet.mako.co.il/b', signal());
+    assert.equal(FakeSession.opened.length, 1);
+  });
+  test('recycles when memory grows past twice its first reading', async () => {
+    const r = make({ memoryCheckMs: 10, maxMemoryBytes: 100_000 });
+    await r.read('https://shironet.mako.co.il/a', signal());
+    await new Promise((resolve) => setTimeout(resolve, 40)); // baseline: 100
+    FakeSession.opened[0].memory = 250;
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    await r.read('https://shironet.mako.co.il/b', signal());
+    assert.equal(FakeSession.opened.length, 2);
+    assert.match(FakeSession.opened[0].closedWith ?? '', /memory growth/);
+  });
+  test('recycles at the hard memory ceiling', async () => {
     const r = make({ memoryCheckMs: 10 });
     await r.read('https://shironet.mako.co.il/a', signal());
     FakeSession.opened[0].memory = 5000;

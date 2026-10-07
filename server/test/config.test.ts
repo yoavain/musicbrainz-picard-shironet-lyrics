@@ -41,10 +41,10 @@ describe('config', () => {
     assert.deepEqual(config.allowedHosts, [`127.0.0.1:${DEFAULT_PORT}`, `localhost:${DEFAULT_PORT}`]);
     assert.equal(config.logLevel, 'info');
     assert.equal(config.chromePath, 'chromium');
-    assert.deepEqual(config.browser, { idleMinutes: 10, maxAgeMinutes: 60, maxPages: 200, maxMemoryMb: 600 });
+    assert.deepEqual(config.browser, { idleMinutes: 10, maxAgeMinutes: 60, maxPages: 200, maxMemoryMb: 2000, maxMemoryGrowth: 2 });
     assert.deepEqual(config.pace, { startInterval: 10, minInterval: 5 });
     assert.deepEqual(config.worker, {
-      missTtlHours: 168, failedRetryHours: 24, maxAttempts: 5, calibrationEvery: 50,
+      missTtlHours: 168, failedRetryHours: 24, maxAttempts: 5, maxSearchPages: 5, calibrationEvery: 50,
       calibrationGapDays: 90, calibrationAlertMedian: 0.8, requestLogDays: 90,
     });
     assert.deepEqual(config.notify, { windows: false, ntfyUrl: null });

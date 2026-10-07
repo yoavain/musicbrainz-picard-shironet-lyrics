@@ -6,7 +6,7 @@ import type { Store } from './store.ts';
 import { SOURCE_SHIRONET, isoTime } from './store.ts';
 import type { Name, QueueRow } from './queue.ts';
 import * as queue from './queue.ts';
-import { interpretLyrics, interpretSearch, pickResult, searchUrl } from './shironet.ts';
+import { interpretLyrics, interpretSearch, nextPageUrl, pickResult, searchUrl } from './shironet.ts';
 import type { ExtractedPage, SearchResult } from './shironet.ts';
 import { normalize } from './text.ts';
 import { similarity } from './calibration.ts';
@@ -23,9 +23,11 @@ export interface FetchRules {
   missTtlHours: number;
   failedRetryHours: number;
   maxAttempts: number;
+  /** Search result pages to read per title before "not found" (10 results per page). */
+  maxSearchPages: number;
 }
 
-export const DEFAULT_RULES: FetchRules = { missTtlHours: 7 * 24, failedRetryHours: 24, maxAttempts: 5 };
+export const DEFAULT_RULES: FetchRules = { missTtlHours: 7 * 24, failedRetryHours: 24, maxAttempts: 5, maxSearchPages: 5 };
 
 export function rowNames(row: QueueRow): Name[] {
   const names: Name[] = [{ artist: row.artist, title: row.title }];
@@ -72,11 +74,21 @@ export async function processSong(
     const searched: string[] = [];
     let match: SearchResult | null = null;
     for (const title of distinctTitles(names)) {
-      const result = await request('search', searchUrl(title));
-      if (result.outcome !== 'ok') return failedAttempt(store, row, result, rules, now());
-      const found = interpretSearch(result.page);
-      searched.push(`${found.length} results for "${title}"`);
-      match = names.map((name) => pickResult(found, name.artist, name.title)).find((pick) => pick !== null) ?? null;
+      // Shironet shows 10 results per page; a common title needs the next pages too.
+      let pageUrl: string | null = searchUrl(title);
+      let pages = 0;
+      let count = 0;
+      while (pageUrl && pages < rules.maxSearchPages) {
+        const result = await request('search', pageUrl);
+        if (result.outcome !== 'ok') return failedAttempt(store, row, result, rules, now());
+        pages += 1;
+        const found = interpretSearch(result.page);
+        count += found.length;
+        match = names.map((name) => pickResult(found, name.artist, name.title)).find((pick) => pick !== null) ?? null;
+        if (match) break;
+        pageUrl = nextPageUrl(result.page);
+      }
+      searched.push(pages > 1 ? `${count} results on ${pages} pages for "${title}"` : `${count} results for "${title}"`);
       if (match) break;
     }
     if (!match) {

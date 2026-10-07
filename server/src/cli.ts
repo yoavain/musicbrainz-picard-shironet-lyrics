@@ -38,6 +38,7 @@ function readerLimits(config: Config) {
     maxAgeMs: config.browser.maxAgeMinutes * 60_000,
     maxPages: config.browser.maxPages,
     maxMemoryBytes: config.browser.maxMemoryMb * 1024 * 1024,
+    maxMemoryGrowth: config.browser.maxMemoryGrowth,
     humanPollMs: 15_000,
     memoryCheckMs: 60_000,
   };

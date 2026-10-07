@@ -43,6 +43,12 @@ describe('real Chrome session (incognito context)', () => {
       title: 'שיר לשלום', artist: 'להקת הנח"ל', url: 'https://shironet.mako.co.il/artist?type=lyrics&lang=1&prfid=578&wrkid=3005',
     });
   });
+  test('search page: the "next" link of the paging bar is found', async () => {
+    const page = await session.navigateAndExtract(fixture('shironet_search.html'), signal);
+    assert.equal(page.nextPageHref, '?q=%D7%A9%D7%99%D7%A8+%D7%9C%D7%A9%D7%9C%D7%95%D7%9D&type=lyrics&page=2');
+    const lyrics = await session.navigateAndExtract(fixture('shironet_lyrics.html'), signal);
+    assert.equal(lyrics.nextPageHref, null);
+  });
   test('lyrics page: only <br> breaks lines; entities decoded', async () => {
     const page = interpretLyrics(await session.navigateAndExtract(fixture('shironet_lyrics.html'), signal));
     assert.deepEqual(page, {

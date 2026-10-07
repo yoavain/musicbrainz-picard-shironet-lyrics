@@ -12,12 +12,14 @@ export interface ProcessInfo {
   pid: number;
   ppid: number;
   rssBytes: number;
+  /** Private memory (Windows PrivatePageCount, Linux RssAnon); falls back to rssBytes. */
+  privateBytes: number;
   /** An opaque start-time string; equal strings mean the same process. */
   start: string;
 }
 
 const WINDOWS_QUERY =
-  'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,WorkingSetSize,'
+  'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,WorkingSetSize,PrivatePageCount,'
   + "@{n='Start';e={if ($_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString('o') } else { '' }}} "
   + '| ConvertTo-Json -Compress';
 
@@ -27,9 +29,22 @@ async function listWindows(): Promise<ProcessInfo[]> {
   });
   const parsed = JSON.parse(stdout) as unknown;
   const rows = (Array.isArray(parsed) ? parsed : [parsed]) as Array<{
-    ProcessId: number; ParentProcessId: number; WorkingSetSize: number | null; Start: string;
+    ProcessId: number; ParentProcessId: number; WorkingSetSize: number | null; PrivatePageCount: number | null; Start: string;
   }>;
-  return rows.map((row) => ({ pid: row.ProcessId, ppid: row.ParentProcessId, rssBytes: Number(row.WorkingSetSize ?? 0), start: row.Start }));
+  return rows.map((row) => ({
+    pid: row.ProcessId, ppid: row.ParentProcessId, rssBytes: Number(row.WorkingSetSize ?? 0),
+    privateBytes: Number(row.PrivatePageCount ?? row.WorkingSetSize ?? 0), start: row.Start,
+  }));
+}
+
+/** RssAnon from /proc/<pid>/status: resident memory not shared with files, in bytes. */
+function linuxPrivateBytes(pid: string): number | null {
+  try {
+    const match = /^RssAnon:\s+(\d+)\s+kB/m.exec(readFileSync(`/proc/${pid}/status`, 'utf8'));
+    return match ? Number(match[1]) * 1024 : null;
+  } catch {
+    return null;
+  }
 }
 
 function listLinux(): ProcessInfo[] {
@@ -40,7 +55,8 @@ function listLinux(): ProcessInfo[] {
       const stat = readFileSync(`/proc/${name}/stat`, 'utf8');
       // Fields after the command name, which is in parentheses and may contain spaces.
       const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-      result.push({ pid: Number(name), ppid: Number(fields[1]), rssBytes: Number(fields[21]) * 4096, start: fields[19] });
+      const rssBytes = Number(fields[21]) * 4096;
+      result.push({ pid: Number(name), ppid: Number(fields[1]), rssBytes, privateBytes: linuxPrivateBytes(name) ?? rssBytes, start: fields[19] });
     } catch {
       // the process ended while we read
     }
@@ -96,11 +112,11 @@ export async function killTree(pid: number): Promise<void> {
   }
 }
 
-/** Total resident memory of a process and its descendants, or null when it is gone. */
+/** Total private memory of a process and its descendants, or null when it is gone. */
 export async function treeMemory(pid: number): Promise<number | null> {
   const all = await listProcesses();
   const root = all.find((info) => info.pid === pid);
   if (!root) return null;
   const members = new Set([pid, ...descendants(all, pid)]);
-  return all.filter((info) => members.has(info.pid)).reduce((sum, info) => sum + info.rssBytes, 0);
+  return all.filter((info) => members.has(info.pid)).reduce((sum, info) => sum + info.privateBytes, 0);
 }
