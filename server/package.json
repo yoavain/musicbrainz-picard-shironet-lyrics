@@ -11,6 +11,7 @@
   "scripts": {
     "start": "node src/cli.ts serve",
     "test": "node --test \"test/**/*.test.ts\"",
+    "test:browser": "node --test --test-concurrency=1 \"test-browser/**/*.test.ts\"",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -254,12 +254,13 @@ export class Worker {
       result = { outcome: 'challenge', detail: `challenge page ${result.page.url}` };
     }
     const at = this.clock.now();
+    const gapSeconds = this.lastRequestAt === null ? null : (at - this.lastRequestAt) / 1000;
     this.lastRequestAt = at;
     queue.logRequest(this.store, {
       at: at / 1000, kind, outcome: result.outcome, httpStatus: null,
       detail: result.outcome === 'ok' ? null : result.detail, url, artist: row.artist, title: row.title,
     });
-    this.log.info({ kind, outcome: result.outcome, url, artist: row.artist, title: row.title, interval: this.pacer.state.interval }, 'shironet request');
+    this.log.info({ kind, outcome: result.outcome, url, gap: gapSeconds, artist: row.artist, title: row.title, interval: this.pacer.state.interval }, 'shironet request');
     if (result.outcome === 'ok') this.pacer.onSuccess(at / 1000);
     savePace(this.store, this.pacer.state);
     return result;

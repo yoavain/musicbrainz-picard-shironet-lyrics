@@ -166,6 +166,28 @@ describe('API', () => {
     assert.equal(reply.statusCode, 202);
     assert.deepEqual(reply.json(), { status: 'fetching' });
   });
+  test('admin: requeue-not-found and calibrate', async () => {
+    await sendJson('POST', '/lyrics/fetch', SONG);
+    store.db.prepare("UPDATE queue SET status = 'not_found', retry_after = '2026-10-13T12:00:00+00:00'").run();
+    const requeued = await sendJson('POST', '/admin/requeue-not-found', {});
+    assert.deepEqual(requeued.json(), { count: 1 });
+    await sendJson('PUT', '/lyrics', { artist: 'אמן', title: 'מוכר', lyrics: 'שורה' });
+    const calibrated = await sendJson('POST', '/admin/calibrate', { count: 3 });
+    assert.deepEqual(calibrated.json(), { queued: 1 });
+    const bad = await sendJson('POST', '/admin/calibrate', { count: 0 });
+    assert.equal(bad.statusCode, 400);
+  });
+  test('per-request log lines are debug, not info', async () => {
+    await app.close();
+    const lines: string[] = [];
+    app = buildApp({
+      service: new LyricsService(store), allowedHosts: [HOST], version: '9.9.9',
+      logger: { level: 'info', stream: { write: (line: string) => { lines.push(line); } } },
+    });
+    await app.ready();
+    await app.inject({ method: 'GET', url: '/health', headers: { host: HOST } });
+    assert.deepEqual(lines.filter((line) => line.includes('/health')), []);
+  });
   test('status', async () => {
     await sendJson('POST', '/lyrics/fetch', SONG);
     const reply = await app.inject({ method: 'GET', url: '/status', headers: { host: HOST } });

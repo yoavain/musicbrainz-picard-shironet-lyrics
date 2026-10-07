@@ -3,8 +3,12 @@
     "target": "esnext",
     "module": "nodenext",
     "moduleResolution": "nodenext",
-    "lib": ["esnext"],
-    "types": ["node"],
+    "lib": [
+      "esnext"
+    ],
+    "types": [
+      "node"
+    ],
     "strict": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,
@@ -13,5 +17,9 @@
     "resolveJsonModule": true,
     "skipLibCheck": true
   },
-  "include": ["src", "test"]
+  "include": [
+    "src",
+    "test",
+    "test-browser"
+  ]
 }

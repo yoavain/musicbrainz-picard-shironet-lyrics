@@ -14,7 +14,8 @@ export interface AppOptions {
   service: LyricsService;
   allowedHosts: readonly string[];
   version: string;
-  logger?: boolean;
+  logger?: boolean | { level: string; stream: { write(line: string): void } };
+  calibrationGapDays?: number;
 }
 
 // No C0 controls and no DEL in names. Lyrics may keep tab, line feed and carriage return.
@@ -65,6 +66,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
   const app = Fastify({
     logger: options.logger ?? false,
     bodyLimit: BODY_LIMIT,
+    disableRequestLogging: true,
     // Reject unknown fields instead of silently removing them; never coerce types.
     ajv: { customOptions: { removeAdditional: false, coerceTypes: false } },
   });
@@ -93,6 +95,11 @@ export function buildApp(options: AppOptions): FastifyInstance {
 
   app.addHook('preValidation', async (request: FastifyRequest) => {
     if (!wellFormed(request.body)) throw badRequest('Text is not valid Unicode');
+  });
+
+  // One line per API call, at debug level (the spec); Fastify's own info lines are off.
+  app.addHook('onResponse', async (request, reply) => {
+    request.log.debug({ method: request.method, url: request.url, statusCode: reply.statusCode, ms: reply.elapsedTime }, 'api call');
   });
 
   app.post('/lyrics/lookup', { schema: { body: bodySchema() } }, async (request, reply) => {
@@ -133,6 +140,22 @@ export function buildApp(options: AppOptions): FastifyInstance {
   }, async (request) => {
     const { lyrics, ref, replace, ...song } = request.body as Song & { lyrics: string; ref?: string; replace?: boolean };
     return { result: service.put(song, lyrics, ref ?? null, replace ?? false) };
+  });
+
+  app.post('/admin/requeue-not-found', {
+    schema: { body: { type: 'object', additionalProperties: false, properties: {} } },
+  }, async () => ({ count: service.requeueNotFound() }));
+
+  app.post('/admin/calibrate', {
+    schema: {
+      body: {
+        type: 'object', additionalProperties: false, required: ['count'],
+        properties: { count: { type: 'integer', minimum: 1, maximum: 100 } },
+      },
+    },
+  }, async (request) => {
+    const { count } = request.body as { count: number };
+    return { queued: service.enqueueCalibration(count, options.calibrationGapDays ?? 90) };
   });
 
   app.get('/status', async () => service.status());

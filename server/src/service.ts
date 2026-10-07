@@ -5,6 +5,7 @@ import { SOURCE_EMBEDDED, isoTime } from './store.ts';
 import { cacheKey, cleanLyrics, isHebrewSong } from './text.ts';
 import * as queue from './queue.ts';
 import type { Name, Priority } from './queue.ts';
+import { enqueueCalibration } from './calibration.ts';
 
 export interface Song {
   artist: string;
@@ -133,6 +134,20 @@ export class LyricsService {
     );
     if (results.includes('conflict')) return 'conflict';
     return results.find((result) => result !== 'skipped') ?? 'skipped';
+  }
+
+  /** Songs not found go back to pending now. */
+  requeueNotFound(): number {
+    const count = queue.requeueNotFound(this.store, isoTime(this.now()));
+    if (count > 0) this.hooks.onQueued?.();
+    return count;
+  }
+
+  /** Queues up to `count` calibration samples now. */
+  enqueueCalibration(count: number, gapDays: number): number {
+    const queued = enqueueCalibration(this.store, count, isoTime(this.now()), gapDays);
+    if (queued > 0) this.hooks.onQueued?.();
+    return queued;
   }
 
   status(): ServiceStatus {
