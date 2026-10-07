@@ -75,16 +75,28 @@ export function isChallengeUrl(url: string | null | undefined): boolean {
   return host === CHALLENGE_HOST || host.endsWith(`.${CHALLENGE_HOST}`);
 }
 
-/** The absolute URL of the next search page, or null. Only Shironet URLs are followed. */
+/**
+ * The absolute URL of the next search page, or null. Only Shironet URLs are followed.
+ * From page 2 on, Shironet's links carry `page` twice ("?page=2&q=…&page=3") and the site
+ * reads the first one, so the link is not followed as written: the next URL is the link
+ * with its last `page` value as its only `page`.
+ */
 export function nextPageUrl(page: ExtractedPage): string | null {
   if (!page.nextPageHref) return null;
-  let next: URL;
+  let link: URL;
   try {
-    next = new URL(page.nextPageHref, page.url);
+    link = new URL(page.nextPageHref, page.url);
   } catch {
     return null;
   }
-  return next.hostname === HOST || next.hostname.endsWith(`.${HOST}`) ? next.toString() : null;
+  if (link.hostname !== HOST && !link.hostname.endsWith(`.${HOST}`)) return null;
+  const pages = link.searchParams.getAll('page');
+  const target = pages[pages.length - 1];
+  if (!target) return null;
+  link.searchParams.delete('page');
+  link.searchParams.set('page', target);
+  const url = link.toString();
+  return url === page.url ? null : url;
 }
 
 /** Song results of a search page, in page order. */

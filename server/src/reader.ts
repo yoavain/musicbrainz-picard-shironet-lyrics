@@ -86,7 +86,7 @@ export async function openChromeSession(options: SessionOptions, log: Logger): P
       evaluate,
       memoryBytes: () => treeMemory(chrome.pid),
       close: async (reason: string) => {
-        log.info({ pid: chrome.pid, reason }, 'closing browser');
+        log.info({ browserPid: chrome.pid, reason }, 'closing browser');
         await connection.send('Target.disposeBrowserContext', { browserContextId }, undefined, 5_000).catch(() => {});
         return chrome.close(connection);
       },

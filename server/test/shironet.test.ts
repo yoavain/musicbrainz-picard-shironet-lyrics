@@ -88,6 +88,18 @@ describe('nextPageUrl', () => {
     const p = page({ url: `${BASE_URL}/searchSongs?q=x&type=lyrics`, nextPageHref: '?q=x&type=lyrics&page=2' });
     assert.equal(nextPageUrl(p), `${BASE_URL}/searchSongs?q=x&type=lyrics&page=2`);
   });
+  test('a link with page twice (Shironet, from page 2 on) goes to the last page value', () => {
+    // Live page 2 of a search, 2026-10-07: following this href as written loads page 2 again.
+    const p = page({
+      url: `${BASE_URL}/searchSongs?q=x&type=lyrics&page=2`,
+      nextPageHref: '?page=2&q=x&type=lyrics&page=3',
+    });
+    assert.equal(nextPageUrl(p), `${BASE_URL}/searchSongs?q=x&type=lyrics&page=3`);
+  });
+  test('a next link that leads back to the same page gives null (no loop)', () => {
+    const p = page({ url: `${BASE_URL}/searchSongs?q=x&type=lyrics&page=2`, nextPageHref: '?q=x&type=lyrics&page=2' });
+    assert.equal(nextPageUrl(p), null);
+  });
   test('no link, a link off Shironet, or a malformed link gives null', () => {
     assert.equal(nextPageUrl(page({})), null);
     assert.equal(nextPageUrl(page({ nextPageHref: null })), null);

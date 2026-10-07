@@ -123,7 +123,7 @@ export class ChromeProcess {
       // process exits at once; recoverLeftovers() before each launch prevents that.
       throw new Error(`Chrome did not open its debugging port within the start timeout (${options.chromePath})`);
     }
-    log.info({ pid: chrome.pid, userDataDir }, 'browser started');
+    log.info({ browserPid: chrome.pid, userDataDir }, 'browser started');
     return chrome;
   }
 
@@ -154,7 +154,7 @@ export class ChromeProcess {
       await this.waitForExit(5_000);
     }
     rmSync(join(this.dataDir, RECORD_FILE), { force: true });
-    this.log.info({ pid: this.pid, how }, 'browser closed');
+    this.log.info({ browserPid: this.pid, how }, 'browser closed');
     return { how };
   }
 }
@@ -175,7 +175,7 @@ export async function recoverLeftovers(dataDir: string, log: Logger): Promise<{ 
       if (running && running.start === record.start) {
         await killTree(record.pid);
         killedPid = record.pid;
-        log.warn({ pid: record.pid }, 'killed a browser left over from a crash');
+        log.warn({ browserPid: record.pid }, 'killed a browser left over from a crash');
       }
     }
   } catch (error) {
