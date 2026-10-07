@@ -228,8 +228,8 @@ class LookupBatch:
 class LookupAction(BaseAction):
     """Context menu: fill lyrics from the server; queue misses; replace different lyrics."""
 
-    TITLE = 'Lookup Lyrics'
-    MENU = (PLUGIN_NAME,)
+    # No MENU: one item straight under Plugins, like the other lyrics plugins.
+    TITLE = 'Lookup lyrics in Shironet'
 
     def callback(self, objs):
         files = {}

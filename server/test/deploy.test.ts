@@ -1,7 +1,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  REMOTE, destructiveSteps, healthPollScript, previousRelease, releaseId, releasesToDelete, sshArgs, switchCommand,
+  REMOTE, destructiveSteps, isActive, healthPollScript, previousRelease, releaseId, releasesToDelete, sshArgs, switchCommand,
   systemctl,
 } from '../tools/deploy-lib.ts';
 import type { Migration } from '../src/migrations.ts';
@@ -41,6 +41,10 @@ describe('deploy helpers', () => {
       `ln -sfn ${REMOTE.releases}/20261007T123005Z-abc1234 ${REMOTE.app}/current.new && mv -Tf ${REMOTE.app}/current.new ${REMOTE.current}`,
     );
     assert.throws(() => switchCommand('../etc; rm -rf /'), /release id/);
+  });
+  test('only "active" counts as a running service', () => {
+    assert.equal(isActive('active\n'), true);
+    for (const output of ['inactive\n', 'failed\n', 'activating\n', '']) assert.equal(isActive(output), false);
   });
   test('ssh runs in batch mode with only the given key', () => {
     assert.deepEqual(sshArgs('C:\\Users\\u\\.ssh\\key', 'deploy@host', 'true'), [

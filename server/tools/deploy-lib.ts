@@ -47,6 +47,11 @@ export function systemctl(action: 'start' | 'stop' | 'restart' | 'status' | 'is-
   return `sudo -n systemctl ${action} ${REMOTE.unit}`;
 }
 
+/** systemctl is-active prints one word; only "active" means the service holds the database. */
+export function isActive(output: string): boolean {
+  return output.trim() === 'active';
+}
+
 /** Points `current` at a release: a new link, renamed over the old one (atomic). */
 export function switchCommand(id: string): string {
   if (!isReleaseId(id)) throw new Error(`Not a release id: ${id}`);

@@ -184,6 +184,20 @@ describe('API', () => {
     const bad = await sendJson('POST', '/admin/calibrate', { count: 0 });
     assert.equal(bad.statusCode, 400);
   });
+  test('no Fastify deprecation warning at start', async () => {
+    const codes: string[] = [];
+    const listen = (warning: Error & { code?: string }) => { codes.push(warning.code ?? warning.name); };
+    process.on('warning', listen);
+    try {
+      const other = buildApp({ service: new LyricsService(store), allowedHosts: [HOST], version: '9.9.9' });
+      await other.ready();
+      await other.close();
+      await new Promise((resolve) => setImmediate(resolve)); // warnings are emitted on the next tick
+    } finally {
+      process.off('warning', listen);
+    }
+    assert.deepEqual(codes.filter((code) => code.startsWith('FSTDEP')), []);
+  });
   test('per-request log lines are debug, not info', async () => {
     await app.close();
     const lines: string[] = [];

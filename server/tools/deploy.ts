@@ -18,7 +18,7 @@ import { join, resolve } from 'node:path';
 import { checkDatabase } from '../src/dbtools.ts';
 import { MIGRATIONS } from '../src/migrations.ts';
 import {
-  REMOTE, destructiveSteps, healthPollScript, isReleaseId, previousRelease, releaseId, releasesToDelete, sshArgs,
+  REMOTE, destructiveSteps, healthPollScript, isActive, isReleaseId, previousRelease, releaseId, releasesToDelete, sshArgs,
   switchCommand, systemctl,
 } from './deploy-lib.ts';
 
@@ -136,7 +136,7 @@ async function deploy(args: string[]): Promise<number> {
 
   ssh(switchCommand(id));
   if (noRestart) {
-    console.log(`Switched to ${id}. Not restarted (--no-restart): the old code runs until the next restart.`);
+    console.log(`Switched to ${id}. Not restarted (--no-restart): ${state.health ? 'the running code stays until the next restart' : 'the service starts it on its next start'}.`);
     return 0;
   }
   console.log(`Switched to ${id}; restarting ${REMOTE.unit}...`);
@@ -190,6 +190,12 @@ async function pullProd(args: string[]): Promise<number> {
   }
   const path = resolve(target);
   if (existsSync(path) && !force) throw new Failure(`${path} exists; pass --force to replace it.`);
+  // A read-only open creates -wal and -shm when they are missing (service stopped). Made
+  // by deploy, they would be deploy:lyrics 0640, and the service could not write -shm on
+  // its next start. While the service runs, the files exist and belong to lyrics.
+  if (!isActive(ssh(`${systemctl('is-active')} || true`))) {
+    throw new Failure(`${REMOTE.unit} is not running. pull-prod reads the database only while the service runs (a copy made now would leave files the service cannot write).`);
+  }
   const partial = `${path}.partial`;
   const remoteCopy = `/tmp/lyrics-pull-${process.pid}.sqlite3`;
   // backup reads the database read-only (no lock), so the service keeps running. deploy

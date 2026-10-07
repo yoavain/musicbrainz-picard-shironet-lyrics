@@ -3,7 +3,7 @@
 // byte; user text never travels in a URL or a header.
 
 import { createHash, timingSafeEqual } from 'node:crypto';
-import Fastify from 'fastify';
+import Fastify, { LogController } from 'fastify';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { Entry } from './store.ts';
 import type { Priority } from './queue.ts';
@@ -77,7 +77,8 @@ export function buildApp(options: AppOptions): FastifyInstance {
   const app = Fastify({
     logger: options.logger ?? false,
     bodyLimit: BODY_LIMIT,
-    disableRequestLogging: true,
+    // Fastify's own per-request info lines are off; the onResponse hook logs at debug.
+    logController: new LogController({ disableRequestLogging: true }),
     // Reject unknown fields instead of silently removing them; never coerce types.
     ajv: { customOptions: { removeAdditional: false, coerceTypes: false } },
   });

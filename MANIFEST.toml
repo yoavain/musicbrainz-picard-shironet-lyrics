@@ -8,7 +8,7 @@ the lyrics cache and fetches from Shironet with a real browser. Set the server U
 
 - When a file without lyrics is matched to a track, the plugin asks the server: a cached
   song fills the **Lyrics** tag at once, any other Hebrew song is queued for Shironet.
-- Right-click > **Shironet Lyrics > Lookup Lyrics** fills missing lyrics, replaces lyrics
+- Right-click > **Plugins > Lookup lyrics in Shironet** fills missing lyrics, replaces lyrics
   that differ from the cached ones, and queues the rest. Run it again later for queued songs.
 - Every loaded or saved file sends its lyrics to the server. Lyrics changed in a save
   replace the cached ones.

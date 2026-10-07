@@ -23,8 +23,8 @@ blocked, a visible browser gets through. That is why fetching lives in the serve
 - **Lyrics on match.** When Picard matches a file without lyrics to a track, the plugin
   asks the server. A cached song fills the tag at once; any other Hebrew song is queued,
   ahead of songs queued by folder scans.
-- **Lookup Lyrics.** Right-click files, tracks, albums or clusters > **Shironet Lyrics >
-  Lookup Lyrics**. It fills missing lyrics, replaces lyrics that differ from the cached
+- **Lookup lyrics.** Right-click files, tracks, albums or clusters > **Plugins > Lookup
+  lyrics in Shironet**. It fills missing lyrics, replaces lyrics that differ from the cached
   ones, queues the rest, and shows a summary. Run it again later to pick up queued songs.
   Nothing is written to disk until you save.
 - **Your own lyrics feed the cache.** Every file Picard loads or saves sends its lyrics to
@@ -109,6 +109,10 @@ Server commands (`node src/cli.ts <command>` in `server/`):
 | `backup <file> [--db <database>]` | A consistent copy of the database (read-only; runs while the server runs). |
 | `check-db [database]` | Integrity check and row counts (read-only). |
 
+Run `backup` and `check-db` as the service's own user, or only while the service runs.
+A read-only open creates the `-wal` and `-shm` files when they are missing; made by
+another user, they can stop the service from writing its database.
+
 At start the server migrates an older database: it copies it to `backups/` in the data
 folder (the newest 5 copies stay), then runs the steps in `server/src/migrations.ts` in one
 transaction. It refuses a database newer than its code. `GET /health` answers the version,
@@ -125,7 +129,7 @@ Deploy from this machine (in `server/`, with a clean, committed `server/` folder
 |---|---|
 | `npm run deploy` | Uploads the committed `server/` as a new release, runs `npm ci`, switches `current` to it, restarts the service and waits for `/health` to report the commit. On failure it switches back. Keeps 3 releases. `-- --no-restart` installs without a restart; `-- --allow-destructive` is needed when a pending migration is marked destructive. |
 | `npm run rollback` | Switches back to the release before the current one. A release older than a migration cannot open the migrated database; the pre-migration copy is in the data folder's `backups/`. |
-| `npm run pull-prod -- <file> [--force]` | Copies the production database to a local file (never the other way). |
+| `npm run pull-prod -- <file> [--force]` | Copies the production database to a local file (never the other way). It refuses while the service is stopped. |
 
 `LYRICS_SERVER_SSH_KEY` and `LYRICS_SERVER_DEPLOY_TARGET` override the SSH key and the
 `user@host`. The first connection needs the container's host key in `known_hosts`: run
