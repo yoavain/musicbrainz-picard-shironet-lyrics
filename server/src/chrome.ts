@@ -24,6 +24,8 @@ export interface LaunchOptions {
   dataDir: string;
   /** Arguments before Chrome's own (the tests run a fake Chrome script through node). */
   prefixArgs?: string[];
+  /** More Chrome flags from the config (browser.extraArgs). */
+  extraArgs?: readonly string[];
   startTimeoutMs?: number;
 }
 
@@ -88,7 +90,7 @@ export class ChromeProcess {
     mkdirSync(userDataDir, { recursive: true });
     const port = await freePort();
     const args = [
-      ...(options.prefixArgs ?? []), `--user-data-dir=${userDataDir}`, `--remote-debugging-port=${port}`, ...CHROME_FLAGS, 'about:blank',
+      ...(options.prefixArgs ?? []), `--user-data-dir=${userDataDir}`, `--remote-debugging-port=${port}`, ...CHROME_FLAGS, ...(options.extraArgs ?? []), 'about:blank',
     ];
     // Linux: its own process group, so the whole tree can be killed at once.
     const child = spawn(options.chromePath, args, { stdio: 'ignore', detached: process.platform !== 'win32' });

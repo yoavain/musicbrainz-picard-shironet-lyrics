@@ -37,7 +37,7 @@ def main(argv: list[str] | None = None) -> int:
 
     load_plugin_package()
     from shironet_lyrics.plugin.scan_state import STATE_FILE, ScanState
-    from shironet_lyrics.plugin.server_client import DEFAULT_SERVER_URL, ServerClient, ServerUnavailable
+    from shironet_lyrics.plugin.server_client import DEFAULT_SERVER_URL, ServerClient, ServerUnavailable, Unauthorized
 
     old_cache = default_db_path()
     parser = argparse.ArgumentParser(description='Scan a folder for the Shironet lyrics server.')
@@ -63,9 +63,15 @@ def main(argv: list[str] | None = None) -> int:
     from shironet_lyrics.plugin.scanner import format_summary, scan_folder
     from shironet_lyrics.plugin.tag_reader import AUDIO_EXTENSIONS, read_tags
 
-    client = ServerClient(args.server)
+    # The token for a server on the network: from the environment, so it stays out of
+    # the shell history and the process list.
+    client = ServerClient(args.server, token=os.environ.get('LYRICS_SERVER_TOKEN'))
     try:
         version = client.health().body.get('version', '?')
+        client.status()  # checks the token
+    except Unauthorized:
+        print(f'The lyrics server at {args.server} refused the token. Set LYRICS_SERVER_TOKEN.', file=sys.stderr)
+        return 1
     except ServerUnavailable as error:
         print(f'The lyrics server does not answer at {args.server}: {error}', file=sys.stderr)
         print('Start it with "npm start" in the server folder.', file=sys.stderr)

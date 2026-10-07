@@ -10,7 +10,7 @@ const value = (name) => process.argv.find((arg) => arg.startsWith(`--${name}=`))
 const profile = value('user-data-dir');
 const port = Number(value('remote-debugging-port'));
 const renderer = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
-writeFileSync(join(profile, 'children.json'), JSON.stringify({ renderer: renderer.pid }));
+writeFileSync(join(profile, 'children.json'), JSON.stringify({ renderer: renderer.pid, args: process.argv.slice(2) }));
 writeFileSync(join(profile, 'lock-me.txt'), 'held open while running');
 createServer((request, response) => {
   response.setHeader('content-type', 'application/json');

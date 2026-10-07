@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_PORT, defaultChromePath, defaultDataDir, loadConfig } from '../src/config.ts';
+import { DEFAULT_PORT, defaultChromePath, defaultDataDir, loadConfig, localBaseUrl } from '../src/config.ts';
 
 const CHROME_DEV = 'C:\\Program Files\\Google\\Chrome Dev\\Application\\chrome.exe';
 const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const nothingExists = () => false;
+const TOKEN = 'a'.repeat(16) + 'B0-_.~+/=';
 
 describe('config', () => {
   let dir: string;
@@ -15,7 +16,7 @@ describe('config', () => {
   afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
   function load(env: Record<string, string> = {}, platform = 'linux') {
-    return loadConfig({ SHIRONET_DATA_DIR: dir, ...env }, platform, '/home/u', nothingExists);
+    return loadConfig({ LYRICS_SERVER_DATA_DIR: dir, ...env }, platform, '/home/u', nothingExists);
   }
   function writeConfig(value: unknown) {
     writeFileSync(join(dir, 'config.json'), JSON.stringify(value), 'utf8');
@@ -41,7 +42,8 @@ describe('config', () => {
     assert.deepEqual(config.allowedHosts, [`127.0.0.1:${DEFAULT_PORT}`, `localhost:${DEFAULT_PORT}`]);
     assert.equal(config.logLevel, 'info');
     assert.equal(config.chromePath, 'chromium');
-    assert.deepEqual(config.browser, { idleMinutes: 10, maxAgeMinutes: 60, maxPages: 200, maxMemoryMb: 2000, maxMemoryGrowth: 2 });
+    assert.deepEqual(config.browser, { idleMinutes: 10, maxAgeMinutes: 60, maxPages: 200, maxMemoryMb: 2000, maxMemoryGrowth: 2, extraArgs: [] });
+    assert.equal(config.apiToken, null);
     assert.deepEqual(config.pace, { startInterval: 10, minInterval: 5 });
     assert.deepEqual(config.worker, {
       missTtlHours: 168, failedRetryHours: 24, maxAttempts: 5, maxSearchPages: 5, calibrationEvery: 50,
@@ -55,7 +57,7 @@ describe('config', () => {
       port: 9000, allowedHosts: ['Server.Lan:9000'], browser: { maxPages: 50 }, pace: { minInterval: 8 },
       worker: { calibrationEvery: 0 }, notify: { ntfyUrl: 'https://ntfy.example/x' }, logLevel: 'debug',
     }), 'utf8');
-    const config = load({ SHIRONET_HOST: 'localhost', SHIRONET_LOG_LEVEL: 'warn', SHIRONET_CHROME: 'C:\\c.exe' });
+    const config = load({ LYRICS_SERVER_HOST: 'localhost', LYRICS_SERVER_LOG_LEVEL: 'warn', LYRICS_SERVER_CHROME: 'C:\\c.exe' });
     assert.equal(config.host, 'localhost');
     assert.equal(config.port, 9000);
     assert.deepEqual(config.allowedHosts, ['127.0.0.1:9000', 'localhost:9000', 'server.lan:9000']);
@@ -67,16 +69,36 @@ describe('config', () => {
     assert.equal(config.logLevel, 'warn');
     assert.equal(config.chromePath, 'C:\\c.exe');
   });
-  test('a host that is not loopback is refused until the LAN token exists', () => {
+  test('a host that is not loopback needs the API token', () => {
     for (const host of ['0.0.0.0', '192.168.1.10', '::']) {
-      assert.throws(() => load({ SHIRONET_HOST: host }), /loopback/);
+      assert.throws(() => load({ LYRICS_SERVER_HOST: host }), /LYRICS_SERVER_TOKEN/);
+      assert.equal(load({ LYRICS_SERVER_HOST: host, LYRICS_SERVER_TOKEN: TOKEN }).host, host);
     }
     for (const host of ['127.0.0.1', 'localhost', '::1']) {
-      assert.equal(load({ SHIRONET_HOST: host }).host, host);
+      assert.equal(load({ LYRICS_SERVER_HOST: host }).host, host);
+    }
+  });
+  test('the API token comes from the environment only, and must be long', () => {
+    assert.equal(load().apiToken, null);
+    assert.equal(load({ LYRICS_SERVER_TOKEN: TOKEN }).apiToken, TOKEN);
+    for (const bad of ['short', 'x'.repeat(23), `${TOKEN} space`, `${TOKEN}א`]) {
+      assert.throws(() => load({ LYRICS_SERVER_TOKEN: bad }), /LYRICS_SERVER_TOKEN/);
+    }
+    writeConfig({ apiToken: TOKEN });
+    assert.throws(() => load(), /LYRICS_SERVER_TOKEN/);
+  });
+  test('browser.extraArgs: Chrome flags added to the launch', () => {
+    assert.deepEqual(load().browser.extraArgs, []);
+    writeConfig({ browser: { extraArgs: ['--no-sandbox', '--lang=he'] } });
+    assert.deepEqual(load().browser.extraArgs, ['--no-sandbox', '--lang=he']);
+    for (const bad of ['--no-sandbox', ['no-sandbox'], [3], ['--user-data-dir=/x'], ['--remote-debugging-port=9222'],
+      ['--remote-debugging-pipe'], ['--headless'], ['--headless=new']]) {
+      writeConfig({ browser: { extraArgs: bad } });
+      assert.throws(() => load(), /browser.extraArgs/);
     }
   });
   test('a bad port is refused', () => {
-    assert.throws(() => load({ SHIRONET_PORT: '99999' }), /port/i);
+    assert.throws(() => load({ LYRICS_SERVER_PORT: '99999' }), /port/i);
   });
   test('wrong types and bad numbers are refused with the key name', () => {
     writeConfig({ browser: { maxPages: '200' } });
@@ -95,5 +117,16 @@ describe('config', () => {
   test('broken JSON names the file', () => {
     writeFileSync(join(dir, 'config.json'), '{ broken', 'utf8');
     assert.throws(() => load(), /config\.json/);
+  });
+});
+
+describe('localBaseUrl', () => {
+  test('a wildcard bind is called on loopback; a fixed address on itself', () => {
+    assert.equal(localBaseUrl({ host: '0.0.0.0', port: 8735 }), 'http://127.0.0.1:8735');
+    assert.equal(localBaseUrl({ host: '::', port: 8735 }), 'http://127.0.0.1:8735');
+    assert.equal(localBaseUrl({ host: '127.0.0.1', port: 9000 }), 'http://127.0.0.1:9000');
+    assert.equal(localBaseUrl({ host: 'localhost', port: 8735 }), 'http://127.0.0.1:8735');
+    assert.equal(localBaseUrl({ host: '::1', port: 8735 }), 'http://[::1]:8735');
+    assert.equal(localBaseUrl({ host: '192.168.68.194', port: 8735 }), 'http://192.168.68.194:8735');
   });
 });

@@ -11,6 +11,11 @@ export const DEFAULT_PORT = 8735;
 export const DB_FILE = 'lyrics.sqlite3';
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 const LOG_LEVELS = new Set(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']);
+// Printable ASCII without spaces (it travels in a header), long enough not to be guessed.
+const TOKEN_PATTERN = /^[\x21-\x7e]{24,}$/;
+// Flags the server sets itself: changing them breaks the CDP connection or gets the
+// browser blocked (headless).
+const OWN_CHROME_FLAGS = /^--(user-data-dir|remote-debugging-port|remote-debugging-pipe|headless)(=|$)/;
 
 export interface BrowserConfig {
   idleMinutes: number;
@@ -18,6 +23,8 @@ export interface BrowserConfig {
   maxPages: number;
   maxMemoryMb: number;
   maxMemoryGrowth: number;
+  /** More Chrome flags, for example --no-sandbox in a container. */
+  extraArgs: string[];
 }
 
 export type WorkerConfig = Pick<WorkerOptions,
@@ -29,6 +36,8 @@ export interface Config {
   port: number;
   dataDir: string;
   allowedHosts: string[];
+  /** Bearer token every route except /health needs; null: no token (loopback only). */
+  apiToken: string | null;
   logLevel: string;
   chromePath: string;
   browser: BrowserConfig;
@@ -82,6 +91,17 @@ function bool(values: Json, path: string, key: string, fallback: boolean): boole
   return value;
 }
 
+function extraArgs(values: Json): string[] {
+  const value = values.extraArgs;
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || !value.every((arg) => typeof arg === 'string' && arg.startsWith('--'))) {
+    throw new Error('config.json: browser.extraArgs must be a list of flags that start with --');
+  }
+  const own = value.find((arg: string) => OWN_CHROME_FLAGS.test(arg));
+  if (own) throw new Error(`config.json: browser.extraArgs cannot set ${own}: the server sets it`);
+  return value as string[];
+}
+
 function str(value: unknown, path: string): string | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== 'string') throw new Error(`config.json: ${path} must be a string`);
@@ -92,7 +112,7 @@ export function loadConfig(
   env: Env = process.env, platform: string = process.platform, home: string = homedir(),
   exists: (path: string) => boolean = existsSync,
 ): Config {
-  const dataDir = env.SHIRONET_DATA_DIR || defaultDataDir(env, platform, home);
+  const dataDir = env.LYRICS_SERVER_DATA_DIR || defaultDataDir(env, platform, home);
   const path = join(dataDir, 'config.json');
   let file: Json = {};
   if (existsSync(path)) {
@@ -104,13 +124,19 @@ export function loadConfig(
     }
   }
 
-  const host = env.SHIRONET_HOST || str(file.host, 'host') || '127.0.0.1';
-  // The API has no login. A LAN bind needs the shared token from the spec, which does not
-  // exist yet; until then, any client on the network could send "Host: 127.0.0.1:<port>".
-  if (!LOOPBACK_HOSTS.has(host.toLowerCase())) {
-    throw new Error(`Host ${host} is not loopback. Binding to a network address needs the API token, which is not built yet.`);
+  // The token is a secret: the environment only (a systemd EnvironmentFile), never config.json.
+  if (file.apiToken !== undefined) throw new Error('config.json: apiToken is not read from here; set LYRICS_SERVER_TOKEN');
+  const apiToken = env.LYRICS_SERVER_TOKEN || null;
+  if (apiToken !== null && !TOKEN_PATTERN.test(apiToken)) {
+    throw new Error('LYRICS_SERVER_TOKEN must be at least 24 printable ASCII characters, without spaces');
   }
-  const port = Number(env.SHIRONET_PORT || file.port || DEFAULT_PORT);
+  const host = env.LYRICS_SERVER_HOST || str(file.host, 'host') || '127.0.0.1';
+  // Without the token, any client on the network could call the API (and send
+  // "Host: 127.0.0.1:<port>"), so a network address needs it.
+  if (!LOOPBACK_HOSTS.has(host.toLowerCase()) && apiToken === null) {
+    throw new Error(`Host ${host} is not loopback. Binding to a network address needs LYRICS_SERVER_TOKEN.`);
+  }
+  const port = Number(env.LYRICS_SERVER_PORT || file.port || DEFAULT_PORT);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`Invalid port: ${port}`);
   const extraHosts = file.allowedHosts ?? [];
   if (!Array.isArray(extraHosts) || !extraHosts.every((h) => typeof h === 'string')) {
@@ -118,7 +144,7 @@ export function loadConfig(
   }
   const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`, ...extraHosts].map((name) => name.toLowerCase());
 
-  const logLevel = env.SHIRONET_LOG_LEVEL || str(file.logLevel, 'logLevel') || 'info';
+  const logLevel = env.LYRICS_SERVER_LOG_LEVEL || str(file.logLevel, 'logLevel') || 'info';
   if (!LOG_LEVELS.has(logLevel)) throw new Error(`config.json: logLevel must be one of ${[...LOG_LEVELS].join(', ')}`);
 
   const browserFile = section(file, 'browser');
@@ -128,6 +154,7 @@ export function loadConfig(
     maxPages: num(browserFile, 'browser', 'maxPages', 200, 1, 100_000, true),
     maxMemoryMb: num(browserFile, 'browser', 'maxMemoryMb', 2000, 100, 64_000),
     maxMemoryGrowth: num(browserFile, 'browser', 'maxMemoryGrowth', 2, 1.2, 20),
+    extraArgs: extraArgs(browserFile),
   };
 
   const paceFile = section(file, 'pace');
@@ -149,9 +176,19 @@ export function loadConfig(
   const notifyFile = section(file, 'notify');
   const notify = {
     windows: bool(notifyFile, 'notify', 'windows', platform === 'win32'),
-    ntfyUrl: env.SHIRONET_NTFY_URL || str(notifyFile.ntfyUrl, 'notify.ntfyUrl') || null,
+    ntfyUrl: env.LYRICS_SERVER_NTFY_URL || str(notifyFile.ntfyUrl, 'notify.ntfyUrl') || null,
   };
 
-  const chromePath = env.SHIRONET_CHROME || str(file.chromePath, 'chromePath') || defaultChromePath(platform, exists);
-  return { host, port, dataDir, allowedHosts, logLevel, chromePath, browser, pace: { startInterval, minInterval }, worker, notify };
+  const chromePath = env.LYRICS_SERVER_CHROME || str(file.chromePath, 'chromePath') || defaultChromePath(platform, exists);
+  return { host, port, dataDir, allowedHosts, apiToken, logLevel, chromePath, browser, pace: { startInterval, minInterval }, worker, notify };
+}
+
+/**
+ * The URL the server's own commands call. A wildcard bind answers on loopback; a fixed
+ * address answers only there. Its Host header must be in allowedHosts.
+ */
+export function localBaseUrl(config: Pick<Config, 'host' | 'port'>): string {
+  const host = config.host.toLowerCase();
+  if (host === '0.0.0.0' || host === '::' || host === 'localhost') return `http://127.0.0.1:${config.port}`;
+  return host.includes(':') ? `http://[${host}]:${config.port}` : `http://${host}:${config.port}`;
 }

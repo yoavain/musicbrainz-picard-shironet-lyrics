@@ -25,7 +25,7 @@ describe('real Chrome session (incognito context)', () => {
 
   before(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'browser-test-'));
-    const { chromePath } = loadConfig({ SHIRONET_DATA_DIR: dataDir });
+    const { chromePath } = loadConfig({ LYRICS_SERVER_DATA_DIR: dataDir });
     session = await openChromeSession({ chromePath, dataDir, settleMs: 200 }, silentLogger);
   });
   after(async () => {
@@ -106,7 +106,7 @@ describe('nothing from a visit reaches the next session', () => {
   });
 
   test('a cookie and localStorage set in one session are gone in the next', async () => {
-    const { chromePath } = loadConfig({ SHIRONET_DATA_DIR: dataDir });
+    const { chromePath } = loadConfig({ LYRICS_SERVER_DATA_DIR: dataDir });
     const first = await openChromeSession({ chromePath, dataDir, settleMs: 300 }, silentLogger);
     await first.navigateAndExtract(`${base}/set`, signal);
     await first.navigateAndExtract(`${base}/probe`, signal);

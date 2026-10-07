@@ -38,7 +38,14 @@ describe('API', () => {
   test('health answers the version', async () => {
     const reply = await app.inject({ method: 'GET', url: '/health', headers: { host: HOST } });
     assert.equal(reply.statusCode, 200);
-    assert.deepEqual(reply.json(), { ok: true, version: '9.9.9' });
+    assert.deepEqual(reply.json(), { ok: true, version: '9.9.9', commit: null, schemaVersion: null });
+  });
+  test('health answers the release commit and the schema version', async () => {
+    await app.close();
+    app = buildApp({ service: new LyricsService(store), allowedHosts: [HOST], version: '9.9.9', commit: 'abc1234', schemaVersion: 1 });
+    await app.ready();
+    const reply = await app.inject({ method: 'GET', url: '/health', headers: { host: HOST } });
+    assert.deepEqual(reply.json(), { ok: true, version: '9.9.9', commit: 'abc1234', schemaVersion: 1 });
   });
   test('a foreign Host header is refused', async () => {
     const reply = await app.inject({ method: 'GET', url: '/health', headers: { host: 'evil.example:8735' } });
@@ -194,5 +201,51 @@ describe('API', () => {
     assert.deepEqual(reply.json(), {
       lyrics: 0, due: 1, queue: [{ purpose: 'fetch', status: 'pending', priority: 'bulk', count: 1 }],
     });
+  });
+});
+
+describe('API with a token', () => {
+  const TOKEN = 'test-token-0123456789-abcdef';
+  const LAN = 'lyrics.example.home:8735';
+  let store: Store;
+  let app: FastifyInstance;
+
+  beforeEach(async () => {
+    store = new Store(':memory:');
+    app = buildApp({ service: new LyricsService(store), allowedHosts: [HOST, LAN], version: '9.9.9', apiToken: TOKEN });
+    await app.ready();
+  });
+  afterEach(async () => {
+    await app.close();
+    store.close();
+  });
+
+  function lookup(authorization?: string) {
+    const headers: Record<string, string> = { host: LAN, 'content-type': 'application/json; charset=utf-8' };
+    if (authorization !== undefined) headers.authorization = authorization;
+    return app.inject({ method: 'POST', url: '/lyrics/lookup', payload: JSON.stringify(SONG), headers });
+  }
+
+  test('a route without the token, or with a wrong one, answers 401', async () => {
+    for (const authorization of [undefined, '', 'Bearer', `Basic ${TOKEN}`, `Bearer ${TOKEN}x`, `Bearer ${TOKEN.slice(1)}`, TOKEN]) {
+      const reply = await lookup(authorization);
+      assert.equal(reply.statusCode, 401, `authorization: ${authorization}`);
+      assert.deepEqual(reply.json(), { error: 'Unauthorized' });
+      assert.equal(reply.headers['www-authenticate'], 'Bearer');
+    }
+    const status = await app.inject({ method: 'GET', url: '/status', headers: { host: LAN } });
+    assert.equal(status.statusCode, 401);
+  });
+  test('the right token passes (the scheme in any case)', async () => {
+    assert.equal((await lookup(`Bearer ${TOKEN}`)).statusCode, 404); // missing: past the check
+    assert.equal((await lookup(`bearer ${TOKEN}`)).statusCode, 404);
+  });
+  test('health stays open', async () => {
+    const reply = await app.inject({ method: 'GET', url: '/health', headers: { host: LAN } });
+    assert.equal(reply.statusCode, 200);
+  });
+  test('the host check runs first', async () => {
+    const reply = await app.inject({ method: 'GET', url: '/status', headers: { host: 'evil.example', authorization: `Bearer ${TOKEN}` } });
+    assert.equal(reply.statusCode, 403);
   });
 });

@@ -2,6 +2,7 @@
 // Text rules (see the spec, "Hebrew text"): bodies are JSON in UTF-8, checked byte for
 // byte; user text never travels in a URL or a header.
 
+import { createHash, timingSafeEqual } from 'node:crypto';
 import Fastify from 'fastify';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { Entry } from './store.ts';
@@ -14,6 +15,11 @@ export interface AppOptions {
   service: LyricsService;
   allowedHosts: readonly string[];
   version: string;
+  /** The deployed commit (release.json); null in a working tree. */
+  commit?: string | null;
+  schemaVersion?: number | null;
+  /** When set, every route except /health needs "Authorization: Bearer <token>". */
+  apiToken?: string | null;
   logger?: boolean | { level: string; stream: { write(line: string): void } };
   calibrationGapDays?: number;
 }
@@ -56,6 +62,11 @@ function entryFields(entry: Entry) {
   return { lyrics: entry.lyrics, source: entry.source, artist: entry.artist, title: entry.title };
 }
 
+/** Compares digests, so the time taken tells nothing about the token or its length. */
+function sameSecret(given: string, expected: Buffer): boolean {
+  return timingSafeEqual(createHash('sha256').update(given).digest(), expected);
+}
+
 function badRequest(message: string): Error & { statusCode: number } {
   return Object.assign(new Error(message), { statusCode: 400 });
 }
@@ -92,6 +103,18 @@ export function buildApp(options: AppOptions): FastifyInstance {
       return reply.code(403).send({ error: 'Host not allowed' });
     }
   });
+
+  // The LAN token. /health stays open for the uptime monitor; it tells nothing private.
+  if (options.apiToken) {
+    const expected = createHash('sha256').update(options.apiToken).digest();
+    app.addHook('onRequest', async (request, reply) => {
+      if (request.routeOptions.url === '/health') return;
+      const match = /^Bearer (\S+)$/i.exec(request.headers.authorization ?? '');
+      if (!match || !sameSecret(match[1], expected)) {
+        return reply.code(401).header('www-authenticate', 'Bearer').send({ error: 'Unauthorized' });
+      }
+    });
+  }
 
   app.addHook('preValidation', async (request: FastifyRequest) => {
     if (!wellFormed(request.body)) throw badRequest('Text is not valid Unicode');
@@ -160,7 +183,9 @@ export function buildApp(options: AppOptions): FastifyInstance {
 
   app.get('/status', async () => service.status());
 
-  app.get('/health', async () => ({ ok: true, version: options.version }));
+  app.get('/health', async () => ({
+    ok: true, version: options.version, commit: options.commit ?? null, schemaVersion: options.schemaVersion ?? null,
+  }));
 
   return app;
 }

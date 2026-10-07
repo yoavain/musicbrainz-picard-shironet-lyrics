@@ -6,7 +6,7 @@ import pkg from '../package.json' with { type: 'json' };
 import { buildApp } from './api.ts';
 import { calibrationReport, enqueueCalibration } from './calibration.ts';
 import { recoverLeftovers } from './chrome.ts';
-import { DB_FILE, loadConfig } from './config.ts';
+import { DB_FILE, loadConfig, localBaseUrl } from './config.ts';
 import type { Config } from './config.ts';
 import { importPythonCache } from './importer.ts';
 import { acquireLock, isLocked } from './lock.ts';
@@ -18,6 +18,9 @@ import * as queue from './queue.ts';
 import { ChromeReader, openChromeSession } from './reader.ts';
 import { LyricsService } from './service.ts';
 import { searchUrl, BASE_URL } from './shironet.ts';
+import { backupDatabase, checkDatabase } from './dbtools.ts';
+import { BACKUP_DIR } from './migrations.ts';
+import { readRelease } from './release.ts';
 import { Store, isoTime } from './store.ts';
 import { Worker } from './worker.ts';
 import { isAlive } from './processes.ts';
@@ -44,14 +47,18 @@ function readerLimits(config: Config) {
   };
 }
 
+/** The server folder (package.json, release.json). */
+const SERVER_DIR = join(import.meta.dirname, '..');
+
 async function serve(): Promise<number | null> {
   const config = loadConfig();
+  const deployed = readRelease(SERVER_DIR);
   mkdirSync(config.dataDir, { recursive: true });
   const release = acquireLock(config.dataDir);
   const logStream = createLogStream(join(config.dataDir, 'server.log'));
   let store: Store;
   try {
-    store = new Store(join(config.dataDir, DB_FILE));
+    store = new Store(join(config.dataDir, DB_FILE), { backupDir: join(config.dataDir, BACKUP_DIR) });
   } catch (error) {
     logStream.close();
     release();
@@ -67,7 +74,8 @@ async function serve(): Promise<number | null> {
     extraStatus: () => (worker ? (worker.status() as unknown as Record<string, unknown>) : { running: false }),
   });
   const app = buildApp({
-    service, allowedHosts: config.allowedHosts, version: pkg.version,
+    service, allowedHosts: config.allowedHosts, apiToken: config.apiToken, version: pkg.version,
+    commit: deployed.commit, schemaVersion: store.schemaVersion,
     logger: { level: config.logLevel, stream: logStream }, calibrationGapDays: config.worker.calibrationGapDays,
   });
   const log = app.log as unknown as Logger;
@@ -75,7 +83,7 @@ async function serve(): Promise<number | null> {
   await recoverLeftovers(config.dataDir, log);
   const limits = { ...DEFAULT_LIMITS, ...config.pace };
   const reader = new ChromeReader(
-    () => openChromeSession({ chromePath: config.chromePath, dataDir: config.dataDir }, log), readerLimits(config), log,
+    () => openChromeSession({ chromePath: config.chromePath, dataDir: config.dataDir, extraArgs: config.browser.extraArgs }, log), readerLimits(config), log,
   );
   worker = new Worker({
     store, reader, log, options: config.worker,
@@ -111,7 +119,7 @@ async function serve(): Promise<number | null> {
     release();
     throw error;
   }
-  log.info({ dataDir: config.dataDir, version: pkg.version, chrome: config.chromePath, url: `http://${config.host}:${config.port}`, log: join(config.dataDir, 'server.log') }, 'serving');
+  log.info({ dataDir: config.dataDir, version: pkg.version, commit: deployed.commit, schemaVersion: store.schemaVersion, chrome: config.chromePath, chromeExtraArgs: config.browser.extraArgs, token: config.apiToken ? 'set' : 'none', url: `http://${config.host}:${config.port}`, log: join(config.dataDir, 'server.log') }, 'serving');
   worker.start();
   return null;
 }
@@ -119,16 +127,21 @@ async function serve(): Promise<number | null> {
 /** True when a server answers on the configured address. */
 async function serverAnswers(config: Config): Promise<boolean> {
   try {
-    const reply = await fetch(`http://127.0.0.1:${config.port}/health`, { signal: AbortSignal.timeout(1000) });
+    const reply = await fetch(`${localBaseUrl(config)}/health`, { signal: AbortSignal.timeout(1000) });
     return reply.ok;
   } catch {
     return false;
   }
 }
 
+/** The token header for the server's own commands (empty without a token). */
+function authHeader(config: Config): Record<string, string> {
+  return config.apiToken ? { authorization: `Bearer ${config.apiToken}` } : {};
+}
+
 async function postAdmin(config: Config, path: string, body: unknown): Promise<unknown> {
-  const reply = await fetch(`http://127.0.0.1:${config.port}${path}`, {
-    method: 'POST', headers: { 'content-type': 'application/json; charset=utf-8' }, body: JSON.stringify(body),
+  const reply = await fetch(`${localBaseUrl(config)}${path}`, {
+    method: 'POST', headers: { 'content-type': 'application/json; charset=utf-8', ...authHeader(config) }, body: JSON.stringify(body),
   });
   if (!reply.ok) throw new Error(`${path} answered ${reply.status}: ${await reply.text()}`);
   return reply.json();
@@ -138,7 +151,7 @@ async function postAdmin(config: Config, path: string, body: unknown): Promise<u
 async function withStore<T>(config: Config, fn: (store: Store) => T): Promise<T> {
   mkdirSync(config.dataDir, { recursive: true });
   const release = acquireLock(config.dataDir);
-  const store = new Store(join(config.dataDir, DB_FILE));
+  const store = new Store(join(config.dataDir, DB_FILE), { backupDir: join(config.dataDir, BACKUP_DIR) });
   try {
     return fn(store);
   } finally {
@@ -150,7 +163,7 @@ async function withStore<T>(config: Config, fn: (store: Store) => T): Promise<T>
 async function statusCommand(): Promise<number> {
   const config = loadConfig();
   if (await serverAnswers(config)) {
-    const reply = await fetch(`http://127.0.0.1:${config.port}/status`);
+    const reply = await fetch(`${localBaseUrl(config)}/status`, { headers: authHeader(config) });
     console.log(JSON.stringify(await reply.json(), null, 2));
     return 0;
   }
@@ -237,7 +250,7 @@ async function checkBrowserCommand(): Promise<number> {
       ["quotes '", searchUrl("ג'ירפה")],
     ];
     let failures = 0;
-    const session = await openChromeSession({ chromePath: config.chromePath, dataDir: config.dataDir }, consoleLogger);
+    const session = await openChromeSession({ chromePath: config.chromePath, dataDir: config.dataDir, extraArgs: config.browser.extraArgs }, consoleLogger);
     try {
       const signal = new AbortController().signal;
       for (const [index, [label, url]] of urls.entries()) {
@@ -266,6 +279,43 @@ async function checkBrowserCommand(): Promise<number> {
   }
 }
 
+/** The database path: --db <path> when given (no config is read then), else the data dir's. */
+function databaseArg(args: string[]): { path: string; rest: string[] } {
+  const index = args.indexOf('--db');
+  if (index >= 0) {
+    const path = args[index + 1];
+    if (!path) throw new Error('--db needs a path');
+    return { path, rest: [...args.slice(0, index), ...args.slice(index + 2)] };
+  }
+  return { path: join(loadConfig().dataDir, DB_FILE), rest: args };
+}
+
+/** backup <target> [--db <path>]: a consistent copy; runs while the server runs. */
+async function backupCommand(args: string[]): Promise<number> {
+  const { path, rest } = databaseArg(args);
+  const [target] = rest;
+  if (!target || rest.length > 1) {
+    console.error('Usage: node src/cli.ts backup <target file> [--db <database>]');
+    return 2;
+  }
+  backupDatabase(path, target);
+  const report = checkDatabase(target);
+  console.log(`Copied ${path} to ${target}: ${report.counts.lyrics} lyrics, schema ${report.schemaVersion}, integrity ${report.ok ? 'ok' : 'FAILED'}`);
+  return report.ok ? 0 : 1;
+}
+
+/** check-db [path]: integrity and counts, read-only; runs while the server runs. */
+async function checkDbCommand(args: string[]): Promise<number> {
+  if (args.length > 1) {
+    console.error('Usage: node src/cli.ts check-db [database file]');
+    return 2;
+  }
+  const path = args[0] ?? join(loadConfig().dataDir, DB_FILE);
+  const report = checkDatabase(path);
+  console.log(JSON.stringify({ path, ...report }, null, 2));
+  return report.ok ? 0 : 1;
+}
+
 const COMMANDS: Record<string, Command> = {
   serve,
   import: importCommand,
@@ -273,6 +323,8 @@ const COMMANDS: Record<string, Command> = {
   'requeue-not-found': requeueCommand,
   'enqueue-calibration': calibrateCommand,
   'check-browser': checkBrowserCommand,
+  backup: backupCommand,
+  'check-db': checkDbCommand,
 };
 
 async function main(): Promise<void> {

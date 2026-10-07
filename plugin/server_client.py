@@ -6,6 +6,8 @@ know to one request per second.
 
 Text rules (see the server spec, "Hebrew text"): JSON bodies in raw UTF-8, never in the
 URL; responses decoded as UTF-8; error bodies (404, 422) are read like any other.
+
+A server on the LAN needs its token (the server's LYRICS_SERVER_TOKEN): `Authorization: Bearer <token>` on every call.
 """
 
 from __future__ import annotations
@@ -28,18 +30,25 @@ class ServerUnavailable(Exception):
     """The server did not answer, or answered something that is not JSON."""
 
 
+class Unauthorized(ServerUnavailable):
+    """The server refused the token (missing or wrong). Callers stop as for a server that is down."""
+
+
 def _without_nulls(value: dict) -> dict:
     return {key: item for key, item in value.items() if item is not None}
 
 
 class ServerClient:
-    def __init__(self, base_url: str = DEFAULT_SERVER_URL, timeout: float = 10.0):
+    def __init__(self, base_url: str = DEFAULT_SERVER_URL, timeout: float = 10.0, token: str | None = None):
         self.base_url = base_url.rstrip('/')
         self.timeout = timeout
+        self.token = (token or '').strip() or None
 
     def _call(self, method: str, path: str, body: dict | None = None) -> Answer:
         data = None
         headers = {'Accept': 'application/json'}
+        if self.token:
+            headers['Authorization'] = f'Bearer {self.token}'
         if body is not None:
             data = json.dumps(_without_nulls(body), ensure_ascii=False).encode('utf-8')
             headers['Content-Type'] = 'application/json; charset=utf-8'
@@ -49,6 +58,8 @@ class ServerClient:
                 status, raw = reply.status, reply.read()
         except urllib.error.HTTPError as error:
             status, raw = error.code, error.read()
+            if status == 401:
+                raise Unauthorized(f'{self.base_url}: the server refused the token (missing or wrong)') from error
         except (urllib.error.URLError, OSError) as error:
             raise ServerUnavailable(f'{self.base_url}: {error}') from error
         try:
@@ -61,6 +72,10 @@ class ServerClient:
 
     def health(self) -> Answer:
         return self._call('GET', '/health')
+
+    def status(self) -> Answer:
+        """Queue and pace. Needs the token (unlike /health), so it also checks the token."""
+        return self._call('GET', '/status')
 
     def lookup(self, song: dict) -> Answer:
         """Cached lyrics, or 404. Never queues."""

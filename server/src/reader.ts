@@ -28,6 +28,7 @@ export interface BrowserSession {
 export interface SessionOptions {
   chromePath: string;
   dataDir: string;
+  extraArgs?: readonly string[];
   settleMs?: number;
   navTimeoutMs?: number;
 }
@@ -42,7 +43,7 @@ const delay = (ms: number, signal: AbortSignal) => realClock.sleep(ms, signal);
  */
 export async function openChromeSession(options: SessionOptions, log: Logger): Promise<BrowserSession> {
   await recoverLeftovers(options.dataDir, log);
-  const chrome = await ChromeProcess.launch({ chromePath: options.chromePath, dataDir: options.dataDir }, log);
+  const chrome = await ChromeProcess.launch({ chromePath: options.chromePath, dataDir: options.dataDir, extraArgs: options.extraArgs }, log);
   let cdp: CdpConnection | null = null;
   try {
     cdp = await CdpConnection.connect(chrome.browserWsUrl);

@@ -1,10 +1,17 @@
 // The lyrics database: lyrics, the Shironet queue, the request log and meta values.
 // Only the server opens it (plus the import command while the server is stopped).
 
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import {
+  BASE_VERSION, MIGRATIONS, backupName, checkMigrations, latestVersion, pendingMigrations, pruneBackups,
+} from './migrations.ts';
+import type { Migration } from './migrations.ts';
 import { cacheKey, cleanLyrics } from './text.ts';
 
-export const SCHEMA_VERSION = 1;
+/** The version this code writes: the base schema plus every migration. */
+export const SCHEMA_VERSION = latestVersion();
 export const SOURCE_EMBEDDED = 'embedded';
 export const SOURCE_SHIRONET = 'shironet';
 
@@ -24,6 +31,16 @@ export interface NameInput {
   title?: string | null;
 }
 
+export interface StoreOptions {
+  /** The steps after the base schema (tests pass their own). */
+  migrations?: readonly Migration[];
+  /** Where a copy goes before a migration; null: no copy (the server passes <data dir>/backups). */
+  backupDir?: string | null;
+  now?: () => Date;
+}
+
+// The base schema (version BASE_VERSION). Created only in a new database; later changes
+// are steps in migrations.ts.
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS lyrics (
     artist_key TEXT NOT NULL,
@@ -90,27 +107,49 @@ export class Store {
   readonly db: DatabaseSync;
   private inTransaction = false;
 
-  constructor(path: string) {
+  constructor(path: string, options: StoreOptions = {}) {
     this.db = new DatabaseSync(path);
     this.db.exec('PRAGMA busy_timeout = 5000');
     try {
       if (path !== ':memory:') this.db.exec('PRAGMA journal_mode=WAL');
-      this.db.exec(SCHEMA);
-      this.migrate();
+      this.migrate(path, options);
     } catch (error) {
       this.db.close();
       throw error;
     }
   }
 
-  private migrate(): void {
+  get schemaVersion(): number {
+    return Number(this.getMeta('schema_version'));
+  }
+
+  private migrate(path: string, options: StoreOptions): void {
+    const migrations = options.migrations ?? MIGRATIONS;
+    checkMigrations(migrations);
+    const latest = latestVersion(migrations);
+    const isNew = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'").get() === undefined;
+    if (isNew) {
+      this.transaction(() => {
+        this.db.exec(SCHEMA);
+        this.setMeta('schema_version', String(BASE_VERSION));
+      });
+    }
+    const version = Number(this.getMeta('schema_version') ?? BASE_VERSION);
+    if (!Number.isInteger(version) || version < BASE_VERSION) throw new Error(`Database schema version ${version} is not valid`);
+    if (version > latest) {
+      throw new Error(`Database schema version ${version} is newer than supported version ${latest}`);
+    }
+    const pending = pendingMigrations(version, migrations);
+    if (pending.length === 0) return;
+    if (!isNew && options.backupDir && path !== ':memory:') {
+      mkdirSync(options.backupDir, { recursive: true });
+      const now = (options.now ?? (() => new Date()))();
+      this.db.prepare('VACUUM INTO ?').run(join(options.backupDir, backupName(version, latest, now)));
+      pruneBackups(options.backupDir);
+    }
     this.transaction(() => {
-      const version = this.getMeta('schema_version');
-      if (version === undefined) {
-        this.setMeta('schema_version', String(SCHEMA_VERSION));
-      } else if (Number(version) > SCHEMA_VERSION) {
-        throw new Error(`Database schema version ${version} is newer than supported version ${SCHEMA_VERSION}`);
-      }
+      for (const migration of pending) migration.up(this.db);
+      this.setMeta('schema_version', String(latest));
     });
   }
 

@@ -12,7 +12,10 @@
     "start": "node src/cli.ts serve",
     "test": "node --test \"test/**/*.test.ts\"",
     "test:browser": "node --test --test-concurrency=1 \"test-browser/**/*.test.ts\"",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "deploy": "node tools/deploy.ts deploy",
+    "rollback": "node tools/deploy.ts rollback",
+    "pull-prod": "node tools/deploy.ts pull-prod"
   },
   "dependencies": {
     "fastify": "5.12.5"

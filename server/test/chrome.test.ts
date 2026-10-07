@@ -50,6 +50,18 @@ describe('ChromeProcess (fake Chrome)', () => {
       await chrome.close(null);
     }
   });
+  test('extra flags come after the own ones, before the start page', async () => {
+    const chrome = await ChromeProcess.launch({
+      chromePath: process.execPath, prefixArgs: [FAKE_CHROME], dataDir, startTimeoutMs: 10_000, extraArgs: ['--no-sandbox', '--lang=he'],
+    }, silentLogger);
+    try {
+      const args: string[] = JSON.parse(readFileSync(join(dataDir, BROWSER_DIR, 'children.json'), 'utf8')).args;
+      assert.deepEqual(args.slice(-3), ['--no-sandbox', '--lang=he', 'about:blank']);
+      assert.ok(args.some((arg) => arg.startsWith('--user-data-dir=')));
+    } finally {
+      await chrome.close(null);
+    }
+  });
   test('close without CDP kills the whole tree and removes the record; Chrome keeps its folder', async () => {
     const chrome = await launchFake(dataDir);
     const renderer = rendererPid(dataDir);

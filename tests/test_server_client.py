@@ -7,7 +7,7 @@ import _support
 
 _support.load_plugin_package()
 
-from shironet_lyrics.plugin.server_client import Answer, ServerClient, ServerUnavailable  # noqa: E402
+from shironet_lyrics.plugin.server_client import Answer, ServerClient, ServerUnavailable, Unauthorized  # noqa: E402
 
 
 class StubServer:
@@ -25,6 +25,7 @@ class StubServer:
                 stub.requests.append({
                     'method': self.command, 'path': self.path,
                     'content_type': self.headers.get('Content-Type'), 'raw': raw,
+                    'authorization': self.headers.get('Authorization'),
                 })
                 status, body = stub.answers.get((self.command, self.path), (404, {'status': 'missing'}))
                 data = json.dumps(body, ensure_ascii=False).encode('utf-8')
@@ -74,6 +75,28 @@ class ServerClientTest(unittest.TestCase):
         self.assertEqual(request['content_type'], 'application/json; charset=utf-8')
         self.assertIn('דן תורן'.encode('utf-8'), request['raw'])  # raw UTF-8, not \u escapes
         self.assertEqual(self.body(), {**SONG, 'priority': 'interactive'})
+
+    def test_status(self):
+        self.stub.answers[('GET', '/status')] = (200, {'lyrics': 3, 'due': 1})
+        self.assertEqual(self.client.status(), Answer(200, {'lyrics': 3, 'due': 1}))
+
+    def test_no_token_sends_no_authorization(self):
+        self.client.lookup(SONG)
+        self.assertIsNone(self.stub.requests[-1]['authorization'])
+
+    def test_a_token_goes_in_a_bearer_header(self):
+        client = ServerClient(self.stub.url, timeout=5, token='  secret-token  ')
+        client.lookup(SONG)
+        self.assertEqual(self.stub.requests[-1]['authorization'], 'Bearer secret-token')
+        ServerClient(self.stub.url, timeout=5, token='   ').lookup(SONG)
+        self.assertIsNone(self.stub.requests[-1]['authorization'])
+
+    def test_401_raises_unauthorized(self):
+        self.stub.answers[('POST', '/lyrics/fetch')] = (401, {'error': 'Unauthorized'})
+        with self.assertRaises(Unauthorized) as caught:
+            self.client.fetch(SONG, 'bulk')
+        self.assertIsInstance(caught.exception, ServerUnavailable)  # callers stop as for a server that is down
+        self.assertIn('token', str(caught.exception))
 
     def test_error_answers_keep_their_body(self):
         self.stub.answers[('POST', '/lyrics/fetch')] = (422, {'status': 'not_hebrew'})

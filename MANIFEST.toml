@@ -1,28 +1,22 @@
 uuid = "c0e10fee-0329-4441-ab42-0adaa02b1f96"
 name = "Shironet Lyrics"
-description = "Keeps a local cache of the Hebrew lyrics embedded in your files, for Shironet lookups."
+description = "Fills the Lyrics tag of Hebrew songs from Shironet, through a lyrics server that caches and fetches."
 long_description = """
-Builds a local SQLite cache of Hebrew song lyrics, keyed by artist and title. A song is
-Hebrew when its title or artist contains a Hebrew letter, its language tag is Hebrew, or
-its lyrics are mostly Hebrew.
+A client of the Shironet lyrics server (in this repository's `server/` folder), which keeps
+the lyrics cache and fetches from Shironet with a real browser. Set the server URL in
+**Options > Plugins > Shironet Lyrics** (default `http://127.0.0.1:8735`).
 
-- **Tools > Shironet Lyrics > Scan folder into lyrics cache** reads the lyrics embedded in
-  every audio file under a folder. A rescan reads only new files and files whose size or
-  modification time changed.
-- While Picard runs, every loaded file adds its lyrics to the cache, and every save
-  updates it. Lyrics changed in a save replace the cached ones.
-- When another file already gave different lyrics for the same artist and title, the
-  cached lyrics are kept and the file is named in the log.
+- When a file without lyrics is matched to a track, the plugin asks the server: a cached
+  song fills the **Lyrics** tag at once, any other Hebrew song is queued for Shironet.
+- Right-click > **Shironet Lyrics > Lookup Lyrics** fills missing lyrics, replaces lyrics
+  that differ from the cached ones, and queues the rest. Run it again later for queued songs.
+- Every loaded or saved file sends its lyrics to the server. Lyrics changed in a save
+  replace the cached ones.
+- **Tools > Shironet Lyrics > Scan folder for lyrics** does the same for a whole folder;
+  a rescan reads only new and changed files.
 
-Artist and title are matched loosely: niqqud, punctuation, "feat." parts and version
-suffixes such as "(Live)" are ignored.
-
-- When a file without lyrics is matched to a track, its **Lyrics** tag is filled from the
-  cache. Right-click > **Shironet Lyrics > Lookup Lyrics** does it on demand. Hebrew songs
-  that are not cached are queued for the Shironet worker.
-
-Missing lyrics are fetched from Shironet by a separate command-line worker
-(`scripts/shironet_worker.py`), slowly, because Shironet blocks fast automated access.
+The server fetches only Hebrew songs: a Hebrew letter in the artist or title, or a Hebrew
+language tag. Nothing is written to your files until you save.
 """
 api = ["3.0"]
 authors = ["yoavain"]

@@ -1,106 +1,148 @@
 # Shironet Lyrics for MusicBrainz Picard
 
-A plugin for [MusicBrainz Picard](https://picard.musicbrainz.org/) 3 that keeps a local
-cache of song lyrics, aimed at Hebrew lyrics from [Shironet](https://shironet.mako.co.il/).
+A plugin for [MusicBrainz Picard](https://picard.musicbrainz.org/) 3 that fills the
+**Lyrics** tag of Hebrew songs from [Shironet](https://shironet.mako.co.il/), with a
+lyrics server that keeps the cache and does the fetching.
 
-What works today: the plugin collects the lyrics already embedded in your Hebrew songs
-into a local SQLite cache, from Picard or from a command-line script, and fills the
-**Lyrics** tag of matched tracks from that cache. A separate, slow command-line worker
-fetches missing Hebrew lyrics from Shironet into the same cache.
+## How it works
+
+Two parts:
+
+- **The lyrics server** (`server/`, Node). It owns the lyrics cache (SQLite), the matching
+  rules, and a queue of songs to fetch. It fetches from Shironet with a real, visible
+  Chrome, slowly and politely, and keeps going in the background.
+- **The Picard plugin** (Python, in this folder). It reads tags, asks the server for
+  lyrics, sends the server the lyrics your files already have, and writes the Lyrics tag.
+  It never talks to Shironet itself.
+
+Shironet is behind a bot manager (Radware): plain HTTP clients and headless browsers are
+blocked, a visible browser gets through. That is why fetching lives in the server.
 
 ## Features
 
-- **Lyrics from the cache.** When Picard matches a file to a track and the file has no
-  lyrics, the plugin fills **Lyrics** from the cache. Right-click files, tracks, albums or
-  clusters > **Shironet Lyrics > Lookup Lyrics** does the same on demand, also
-  replacing lyrics that differ from the cached ones, and shows a summary. Both look up the
-  matched MusicBrainz artist and title first, then the file's own tags. Nothing is written
-  to disk until you save.
-
-- **Hebrew songs only.** Shironet is a Hebrew lyrics site, so the cache keeps only Hebrew
-  songs. A song is Hebrew when its title or artist contains a Hebrew letter, its language
-  tag is Hebrew (`heb`), or its lyrics have more Hebrew letters than Latin letters.
-  Other songs are counted as "Not Hebrew" and skipped.
-- **Folder scan.** Tools > Shironet Lyrics > *Scan folder into lyrics cache...* reads the
-  lyrics embedded in every audio file under a folder. It runs in the background with a
-  progress dialog that can cancel, and ends with a summary.
-- **Fast rescans.** The cache records each file's size and modification time. A rescan
-  reads only new and changed files.
-- **Updates while Picard runs.** Every file Picard loads adds its lyrics to the cache.
-  Every save updates it; lyrics you changed in that save replace the cached ones.
-- **Conflicts are kept, not overwritten.** When another file already gave different
-  lyrics for the same artist and title, the cached lyrics stay and the log names the
-  file. A file whose own lyrics changed does update its own entry.
-- **Lyrics are cleaned before they are stored.** A `heb||` or `eng|None|` prefix (written
-  by older lyrics tools into FLAC files) is removed, and so is a title-and-credits header
-  (`ביצוע:`, `מילים:`, `לחן:` ... lines near the top). An "instrumental" placeholder
-  counts as no lyrics. The files themselves are not changed.
-- **Loose matching.** The cache key is artist + title, compared after removing niqqud,
-  accents, punctuation, "feat." parts and version suffixes such as "(Live)",
-  "- Remastered 2011" or "(בהופעה חיה)".
-- **Batch run.** `scripts/scan_folder.py` runs the same scan without Picard, then fetches
-  the queued songs from Shironet. See below.
+- **Lyrics on match.** When Picard matches a file without lyrics to a track, the plugin
+  asks the server. A cached song fills the tag at once; any other Hebrew song is queued,
+  ahead of songs queued by folder scans.
+- **Lookup Lyrics.** Right-click files, tracks, albums or clusters > **Shironet Lyrics >
+  Lookup Lyrics**. It fills missing lyrics, replaces lyrics that differ from the cached
+  ones, queues the rest, and shows a summary. Run it again later to pick up queued songs.
+  Nothing is written to disk until you save.
+- **Your own lyrics feed the cache.** Every file Picard loads or saves sends its lyrics to
+  the server. Lyrics you edit and save replace the cached ones; otherwise the cache keeps
+  its lyrics when a file has different ones (a conflict, named in the log).
+- **Hebrew songs only.** The server fetches a song only when its artist or title has a
+  Hebrew letter (either name: the file's own tags or the MusicBrainz name), or its language
+  tag is Hebrew. Other songs are counted as "Not Hebrew".
+- **Loose cache key, exact Shironet match.** The cache key ignores niqqud, punctuation,
+  direction marks, "feat." parts and version suffixes such as "(Live)" or "(בהופעה חיה)".
+  Matching against Shironet's search results stays exact on the title; a song reported
+  "not found" usually has a title spelled differently from Shironet's — fix the title in
+  the tags and look it up again.
+- **Folder scan.** Tools > Shironet Lyrics > *Scan folder for lyrics...*, or
+  `scripts/scan_folder.py` without Picard. A rescan reads only new and changed files.
 
 Supported formats: MP3, FLAC, Ogg Vorbis, Opus, M4A/MP4, APE, WavPack, Musepack, WMA,
-AIFF, WAV and DSF. Only unsynced lyrics are cached.
+AIFF, WAV and DSF. Only unsynced lyrics are used.
 
-## Install
+## Install the plugin
 
-Requires Picard 3.0 or later.
+Requires Picard 3.0 or later, and a running lyrics server (next section).
 
 1. In Picard, click **Options > Options…**, then select the **Plugins** page.
 2. Click **Install Plugin…**.
 3. Install from one of these tabs:
    - **URL**: in **Git URL:**, type
      `https://github.com/yoavain/musicbrainz-picard-shironet-lyrics`.
-   - **Local**: in **Directory:**, select a clone of this repository. Use this tab to work on
-     the code; select **Load in-place (ignore git)** to load the folder as it is.
+   - **Local**: in **Directory:**, select a clone of this repository. Select **Load
+     in-place (ignore git)** to load the folder as it is.
 4. Click **Install…**. Picard warns that the plugin is not in the official registry.
-5. Click **Help > View Log** and find the line `Lyrics cache: using <path> (N songs)`.
-   It shows where the cache file is.
+5. Open **Options > Plugins > Shironet Lyrics** and set the **Lyrics server URL**
+   (default `http://127.0.0.1:8735`). For a server on the network, also set the **Lyrics
+   server token** (the server's `LYRICS_SERVER_TOKEN`).
+6. Click **Help > View Log** and find `Shironet Lyrics: lyrics server <version> at <URL>`.
+   A warning there means the plugin cannot reach the server, or the server refused the
+   token.
 
-The cache is `plugin-data/shironet-lyrics/lyrics.sqlite3` under Picard's app-data folder.
-It holds full lyrics text: keep it out of git and out of synced folders.
+The plugin keeps one small file of its own: `plugin-data/shironet-lyrics/scan-state.sqlite3`
+under Picard's app-data folder (which files the folder scan already read; no lyrics).
 
-## Use with LRCLIB Lyrics (non-Hebrew songs)
+## Run the server
 
-This plugin covers Hebrew songs only. For other songs, it can run next to
-**LRCLIB Lyrics**, which fetches synced and plain lyrics from [LRCLIB](https://lrclib.net).
-The original [izaz4141/picard-lrclib](https://github.com/izaz4141/picard-lrclib) supports
-Picard 2 only; the Picard 3 version is the fork
-[Opt6/picard-lrclib](https://github.com/Opt6/picard-lrclib). The fork is not in the official
-registry and has not been reviewed here.
-
-To install it, follow the steps in [Install](#install) with the **URL** tab and the Git URL
-`https://github.com/Opt6/picard-lrclib`.
-
-Both plugins write the **Lyrics** tag when Picard matches a file. Shironet Lyrics fills it
-only when the file has no lyrics and the song is in the cache. Which plugin wins on a
-Hebrew song depends on which one runs first and on whether LRCLIB Lyrics replaces
-existing lyrics; check a matched Hebrew album before you save it. LRCLIB Lyrics also
-creates and renames `.lrc` files, so `scripts/export_lyrics.py` skips those tracks.
-
-## Batch run from the command line
+Requires Node 26 or later and Chrome or Chromium (on this Windows machine: Chrome Dev).
 
 ```sh
-python scripts/scan_folder.py "D:\Music" --notify
+cd server
+npm ci
+npm start
 ```
 
-One command for the whole flow:
+- The data folder is `%LOCALAPPDATA%\shironet-lyrics-server` on Windows and
+  `$XDG_STATE_HOME/shironet-lyrics-server` on Linux; `LYRICS_SERVER_DATA_DIR` overrides it. It
+  holds `lyrics.sqlite3`, `server.log` (rotated), an optional `config.json`, and Chrome's own
+  folder `browser/` (managed by Chrome).
+- It listens on `127.0.0.1:8735`. Ctrl+C stops it cleanly: the browser closes first.
+- **On the network:** set `LYRICS_SERVER_TOKEN` (at least 24 printable ASCII characters,
+  environment only, never in `config.json`) and a network `host`, and add the names
+  clients use to `allowedHosts` (for example `"lyrics.example.home:8735"`). Every route
+  except `GET /health` then needs `Authorization: Bearer <token>`. Without a token the
+  server refuses a host that is not loopback.
+- Settings: `config.json` in the data folder, every key optional (a wrong value stops the
+  start with the key's name). The keys and their defaults are in `server/src/config.ts`;
+  `browser.extraArgs` adds Chrome flags (check a new flag with `check-browser`).
+  Environment overrides: `LYRICS_SERVER_DATA_DIR`, `LYRICS_SERVER_HOST`, `LYRICS_SERVER_PORT`,
+  `LYRICS_SERVER_LOG_LEVEL`, `LYRICS_SERVER_CHROME`, `LYRICS_SERVER_NTFY_URL`; the token is
+  `LYRICS_SERVER_TOKEN`. The server's own commands below use the token too.
+- When Shironet shows a CAPTCHA, the server notifies you (Windows notification, or ntfy
+  with `notify.ntfyUrl`) and waits for you to solve it in its browser window; otherwise it
+  pauses for a cooldown (30 minutes, doubling).
 
-1. **Scan**, the same as Picard's Tools menu scan: new and changed files are read, their
-   Hebrew lyrics are cached, and Hebrew songs without lyrics are queued for Shironet.
-   Unchanged files without lyrics are queued from what the last scan recorded, without
-   reading them again.
-2. **Fetch**: the Shironet worker (below) runs until no queued song is due. Afterwards
-   every queued song is cached, or marked "not found" and left alone until its retry
-   time (a week by default).
+Server commands (`node src/cli.ts <command>` in `server/`):
 
-`--no-fetch` stops after step 1. `--hours`, `--max-requests`, `--stop-on-challenge`,
-`--miss-ttl-hours`, `--notify` and `--ntfy-url` are passed to the worker. It writes to the
-plugin's cache file by default (`--db` picks another one), prints a summary, and lists
-files with conflicts or read errors. It is safe to run while Picard is open. Ctrl+C stops
-either step and keeps the work done so far.
+| Command | What it does |
+|---|---|
+| `serve` | Runs the server (what `npm start` does). |
+| `status` | Queue, pace, browser, recent requests and calibration, from the running server or the database. |
+| `requeue-not-found` | Searches songs not found again now instead of in a week. |
+| `enqueue-calibration N` | Re-fetches N songs whose lyrics came from your files and compares (checks the parser). |
+| `check-browser` | With the server stopped: the browser setup against live Shironet, plus a leak check. |
+| `import <old cache>` | One-time move from the old Python plugin cache into an empty data folder. |
+| `backup <file> [--db <database>]` | A consistent copy of the database (read-only; runs while the server runs). |
+| `check-db [database]` | Integrity check and row counts (read-only). |
+
+At start the server migrates an older database: it copies it to `backups/` in the data
+folder (the newest 5 copies stay), then runs the steps in `server/src/migrations.ts` in one
+transaction. It refuses a database newer than its code. `GET /health` answers the version,
+the deployed commit and the schema version.
+
+**Production** runs the server in an LXC container on the LAN, which another repository
+builds and manages. The requirements this server sets for the container (Chromium on a
+virtual display — headless is blocked —, memory, data folder, service unit, health check)
+are agreed with that repository.
+
+Deploy from this machine (in `server/`, with a clean, committed `server/` folder):
+
+| Command | What it does |
+|---|---|
+| `npm run deploy` | Uploads the committed `server/` as a new release, runs `npm ci`, switches `current` to it, restarts the service and waits for `/health` to report the commit. On failure it switches back. Keeps 3 releases. `-- --no-restart` installs without a restart; `-- --allow-destructive` is needed when a pending migration is marked destructive. |
+| `npm run rollback` | Switches back to the release before the current one. A release older than a migration cannot open the migrated database; the pre-migration copy is in the data folder's `backups/`. |
+| `npm run pull-prod -- <file> [--force]` | Copies the production database to a local file (never the other way). |
+
+`LYRICS_SERVER_SSH_KEY` and `LYRICS_SERVER_DEPLOY_TARGET` override the SSH key and the
+`user@host`. The first connection needs the container's host key in `known_hosts`: run
+`ssh -i <key> <user@host> true` once and compare the fingerprint with the network
+repository's record.
+
+## Folder scan from the command line
+
+```sh
+python scripts/scan_folder.py "D:\Music" --server http://127.0.0.1:8735
+```
+
+The same scan as Picard's Tools menu: new and changed files are read; their lyrics go to
+the server, and songs without lyrics are queued there. Unchanged files without lyrics are
+asked for again from what the last scan recorded. It shares the scan state with the plugin
+and prints a summary. Ctrl+C stops after the current file. For a server on the network,
+set `LYRICS_SERVER_TOKEN` in the environment.
 
 It needs `mutagen`. Without an installed `mutagen`, it loads the copy inside the installed
 Picard. That works only when your Python has the same version as Picard's bundled Python
@@ -120,7 +162,7 @@ python scripts/export_lyrics.py "D:\Music"
 ```
 
 - Works on a whole folder, subfolders included, in any language. It reads tags and writes
-  sidecars only: no cache, no database.
+  sidecars only; it does not use the server.
 - A track that already has a `.lrc` or `.txt` is skipped without reading its tags.
   `--overwrite` re-exports it.
 - Synced lyrics (ID3 `SYLT`) become `.lrc`; plain lyrics whose lines carry LRC time tags
@@ -129,93 +171,68 @@ python scripts/export_lyrics.py "D:\Music"
   removes a title-and-credits header and skips "instrumental" placeholders.
 - `--verbose` lists every file written; otherwise the first 20 and the totals.
 
-## Fetch from Shironet (worker)
+## Use with LRCLIB Lyrics (non-Hebrew songs)
 
-Shironet blocks automated access after a few requests (a Radware CAPTCHA), so fetching
-runs outside Picard, slowly, from a queue in the cache file. The queue is filled by the
-folder scan (Picard's or `scan_folder.py`), and by Picard when a Hebrew song misses the
-cache on match or on **Lookup Lyrics**. `scan_folder.py` starts the worker by itself; it
-can also run on its own:
+This plugin covers Hebrew songs only. For other songs, it can run next to
+**LRCLIB Lyrics**, which fetches synced and plain lyrics from [LRCLIB](https://lrclib.net).
+The original [izaz4141/picard-lrclib](https://github.com/izaz4141/picard-lrclib) supports
+Picard 2 only; the Picard 3 version is the fork
+[Opt6/picard-lrclib](https://github.com/Opt6/picard-lrclib). The fork is not in the official
+registry and has not been reviewed here.
 
-```sh
-python scripts/shironet_worker.py run --notify --hours 8
-python scripts/shironet_worker.py status                       # --all-misses lists every miss
-python scripts/shironet_worker.py requeue-not-found            # retry misses now, not in a week
-python scripts/shironet_worker.py enqueue-calibration 30       # cached songs, to compare
-python scripts/shironet_worker.py enqueue-missing "D:\Music"   # queue only, re-reading every file
-```
+To install it, follow the steps in [Install the plugin](#install-the-plugin) with the
+**URL** tab and the Git URL `https://github.com/Opt6/picard-lrclib`.
 
-- A song Shironet does not have gets a retry time a week ahead (`--miss-ttl-hours`,
-  default 168). A song that failed 5 times on network errors gets one a day ahead.
-  Until then the worker skips it; afterwards it is searched again by itself. `status`
-  shows each miss with its retry time.
-
-- A song queued from Picard has two names: the file's own artist and title, and the
-  matched MusicBrainz name when it differs. Each is matched exactly. The alternate is
-  first checked against the same search results, and gets its own search only when its
-  title differs and the first search found nothing. Fetched lyrics are stored under both.
-
-- `run` sends one request at a time: a search, then the lyrics page. It waits between
-  requests (120 s at first, with jitter) and adjusts the wait: 10% shorter after 10
-  successes in a row; on a CAPTCHA it pauses for 30 minutes (doubling on repeats) and
-  continues 50% slower. The learned pace is kept in the cache file between runs.
-- Fetched lyrics go into the cache with source `shironet`, where Picard finds them on the
-  next match or lookup. Calibration songs are only compared with the cached lyrics.
-- Matching is exact on purpose: the title must equal a Shironet result after
-  normalization, and the artist must equal it or contain it. A song reported as
-  "no match" usually has a title spelled differently from Shironet's. Fix the title in
-  the tags, and the next `enqueue-missing` queues the corrected title.
-- `status` shows the queue, the pace, how many requests passed between CAPTCHAs, how long
-  each block lasted, the songs not found (with what was searched), and the calibration
-  similarity.
-- `--notify` shows a Windows notification on a CAPTCHA and at the end; `--ntfy-url`
-  pushes the same messages to an ntfy topic. `--stop-on-challenge` ends the run at the
-  first CAPTCHA. Ctrl+C stops after the current request.
-- It identifies itself as `shironet-lyrics/0.1`, keeps cookies in
-  `shironet-cookies.txt` next to the cache, and needs only the standard library
-  (`enqueue-missing` also needs `mutagen`, like `scan_folder.py`).
+Both plugins write the **Lyrics** tag when Picard matches a file. Shironet Lyrics fills it
+only when the file has no lyrics. Which plugin wins on a Hebrew song depends on which one
+runs first and on whether LRCLIB Lyrics replaces existing lyrics; check a matched Hebrew
+album before you save it. LRCLIB Lyrics also creates and renames `.lrc` files, so
+`scripts/export_lyrics.py` skips those tracks.
 
 ## Layout
 
-Picard loads a plugin from the repository root, so the root holds only `MANIFEST.toml`
-and an `__init__.py` that re-exports `enable` and `disable` from `src/plugin.py`.
+Picard loads a plugin from the repository root, so the root holds `MANIFEST.toml` and an
+`__init__.py` that re-exports `enable` and `disable` from `plugin/plugin.py`.
 
 | Path | Contents |
 |---|---|
-| `src/plugin.py` | Picard hooks, the Tools menu action, the background scan job |
-| `src/lyrics_cache.py` | SQLite cache, key normalization (no Picard or Qt imports) |
-| `src/scanner.py` | Folder walk and incremental scan (no Picard or Qt imports) |
-| `src/tag_reader.py` | Reads artist, title and lyrics with `mutagen`, using Picard's tag names |
-| `src/shironet.py` | Shironet URLs and HTML parsing: search results, lyrics pages, CAPTCHA detection |
-| `src/shironet_queue.py` | The fetch queue and the request log (tables in the cache file) |
-| `src/shironet_worker.py` | Pacing, HTTP client, fetching one song, the run loop, the pace report |
-| `src/lyrics_export.py` | Reads lyrics from tags (SYLT or plain), decides `.lrc` or `.txt`, writes the sidecar |
-| `scripts/scan_folder.py` | Batch run: folder scan, then the Shironet worker |
-| `scripts/export_lyrics.py` | Standalone export of embedded lyrics to `.lrc`/`.txt` sidecars, for Plex |
-| `scripts/shironet_worker.py` | Command-line Shironet worker: queue, run, status |
-| `scripts/_bootstrap.py` | Loads the `src` modules and Picard's bundled `mutagen` without Picard (used by the script and the tests) |
-| `tests/` | Unit tests |
+| `plugin/` | The Picard plugin: hooks and actions (`plugin.py`), the server client, the folder scan and its state, the tag reader, the Plex export |
+| `scripts/` | Command-line tools: folder scan, Plex export, and `_bootstrap.py` (loads the plugin modules and Picard's bundled `mutagen` without Picard) |
+| `tests/` | Python tests |
+| `server/` | The lyrics server: `src/` (TypeScript, run directly by Node), `test/`, `test-browser/` (opt-in tests on real Chrome), `tools/` (deploy script), `DEPENDENCIES.md` (Snyk decisions) |
 
 ## Development
 
-Run the tests from the repository root:
+Python (from the repository root; nothing to install):
 
 ```sh
 python -m unittest discover -s tests
 ```
 
-No packages need installing. The tests use `scripts/_bootstrap.py` to import the `src`
-modules without Picard and to load `mutagen` from the installed Picard. When that fails,
-the tag-reader tests skip. Set `PICARD_EXE` when Picard is not installed in
-`C:\Program Files\MusicBrainz Picard`.
+The tests load the plugin modules without Picard and `mutagen` from the installed Picard;
+when that fails, the tag-reader tests skip. Set `PICARD_EXE` when Picard is not installed in
+`C:\Program Files\MusicBrainz Picard`. To reload the plugin after a code change, restart
+Picard.
 
-To reload the plugin after a code change, disable and enable it in **Options > Plugins**,
-or restart Picard.
+Server (in `server/`):
+
+```sh
+npm test               # unit tests
+npm run typecheck      # tsc --noEmit
+npm run test:browser   # opt-in: real Chrome on local fixture pages, no network
+```
+
+A schema change is a new step at the end of `MIGRATIONS` in `server/src/migrations.ts`
+(never an edit of an earlier step), with `destructive: true` when it drops or rewrites
+data.
+
+Every new npm dependency is checked with Snyk first; the decisions are in
+`server/DEPENDENCIES.md`.
 
 ## License
 
 GPL-2.0-or-later, the same as Picard. See [LICENSE](LICENSE).
 
-The test fixtures in `tests/fixtures/` are hand-made pages with Shironet's HTML structure.
-They contain no lyrics: the lyrics in them are placeholders. The cache and the worker store
-lyrics only on your own computer, for personal use.
+The test fixtures are hand-made pages with Shironet's HTML structure. They contain no
+lyrics: the lyrics in them are placeholders. The cache stores lyrics only on your own
+machines, for personal use.

@@ -19,13 +19,14 @@ from picard.plugin3.api import BaseAction, OptionsPage, PluginApi, Track
 
 from .scan_state import STATE_FILE, ScanState
 from .scanner import ScanStats, format_summary, scan_folder
-from .server_client import DEFAULT_SERVER_URL, Answer, ServerClient, ServerUnavailable
+from .server_client import DEFAULT_SERVER_URL, Answer, ServerClient, ServerUnavailable, Unauthorized
 from .songs import file_ref, raw_lyrics, song_payload
 from .tag_reader import AUDIO_EXTENSIONS, read_tags
 
 
 PLUGIN_NAME = 'Shironet Lyrics'
 SERVER_URL_OPTION = 'server_url'
+API_TOKEN_OPTION = 'api_token'
 # Emit a progress signal every this many files, so the GUI queue is not flooded.
 PROGRESS_STEP = 25
 # Parallel requests to the server (it answers from its database, quickly).
@@ -54,7 +55,15 @@ def _server_url() -> str:
 
 
 def _client() -> ServerClient:
-    return ServerClient(_server_url())
+    return ServerClient(_server_url(), token=_api.plugin_config[API_TOKEN_OPTION])
+
+
+def _check_server() -> Answer:
+    """GET /health, then GET /status: /health is open, /status shows whether the token is accepted."""
+    client = _client()
+    answer = client.health()
+    client.status()
+    return answer
 
 
 class AsyncCalls(QObject):
@@ -283,10 +292,10 @@ class ScanJob(QObject):
     progress = pyqtSignal(int, int)
     finished = pyqtSignal(object)  # ScanStats, or the exception that stopped the scan
 
-    def __init__(self, folder: str, server_url: str):
+    def __init__(self, folder: str, client: ServerClient):
         super().__init__()
         self.folder = folder
-        self.server_url = server_url
+        self.client = client
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name='shironet-lyrics-scan', daemon=True)
 
@@ -304,8 +313,8 @@ class ScanJob(QObject):
                 self.progress.emit(done, total)
 
         try:
-            client = ServerClient(self.server_url)
-            client.health()  # fail early when the server is down
+            client = self.client
+            client.status()  # fail early when the server is down or refuses the token
             state = ScanState(os.path.join(_data_dir(), STATE_FILE))
             try:
                 result = scan_folder(state, client, self.folder, read_tags, AUDIO_EXTENSIONS, report, self._stop.is_set)
@@ -339,7 +348,7 @@ class ScanFolderAction(BaseAction):
         dialog.setAutoClose(False)
         dialog.setAutoReset(False)
 
-        job = ScanJob(folder, _server_url())
+        job = ScanJob(folder, _client())
         dialog.canceled.connect(job.stop)
 
         def on_progress(done: int, total: int) -> None:
@@ -362,6 +371,12 @@ class ScanFolderAction(BaseAction):
 
 
 def _report_scan(api: PluginApi, folder: str, result) -> None:
+    if isinstance(result, Unauthorized):
+        message = (f'The lyrics server at {_server_url()} refused the token.\n\n'
+                   'Set the token in Options > Plugins > Shironet Lyrics.')
+        api.logger.error('Shironet Lyrics: %s', message.replace('\n', ' '))
+        QMessageBox.warning(None, PLUGIN_NAME, message)
+        return
     if isinstance(result, ServerUnavailable):
         message = f'The lyrics server does not answer at {_server_url()}.\n\n{result}\n\nStart it with "npm start" in the server folder.'
         api.logger.error('Shironet Lyrics: %s', message.replace('\n', ' '))
@@ -397,19 +412,26 @@ class ShironetOptionsPage(OptionsPage):
         self.url_edit = QLineEdit()
         self.url_edit.setPlaceholderText(DEFAULT_SERVER_URL)
         layout.addWidget(self.url_edit)
+        layout.addWidget(QLabel('Lyrics server token (only for a server on the network; empty for one on this computer):'))
+        self.token_edit = QLineEdit()
+        self.token_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        layout.addWidget(self.token_edit)
         layout.addStretch()
 
     def load(self):
         self.url_edit.setText(self.api.plugin_config[SERVER_URL_OPTION])
+        self.token_edit.setText(self.api.plugin_config[API_TOKEN_OPTION])
 
     def save(self):
         self.api.plugin_config[SERVER_URL_OPTION] = self.url_edit.text().strip() or DEFAULT_SERVER_URL
+        self.api.plugin_config[API_TOKEN_OPTION] = self.token_edit.text().strip()
 
 
 def enable(api: PluginApi) -> None:
     global _api, _calls, _state
     _api = api
     api.plugin_config.register_option(SERVER_URL_OPTION, DEFAULT_SERVER_URL)
+    api.plugin_config.register_option(API_TOKEN_OPTION, '')
     api.plugin_persist.register_option('last_scan_folder', '')
     _calls = AsyncCalls()
 
@@ -423,12 +445,14 @@ def enable(api: PluginApi) -> None:
         _state = None
 
     def health_done(answer: Answer | None, error) -> None:
-        if error is not None:
+        if isinstance(error, Unauthorized):
+            api.logger.warning('Shironet Lyrics: the lyrics server at %s refused the token; set it in the options', _server_url())
+        elif error is not None:
             api.logger.warning('Shironet Lyrics: the lyrics server does not answer at %s: %s', _server_url(), error)
         else:
             api.logger.info('Shironet Lyrics: lyrics server %s at %s', answer.body.get('version'), _server_url())
 
-    _calls.submit(lambda: _client().health(), health_done)
+    _calls.submit(_check_server, health_done)
 
     api.register_file_post_load_processor(_on_file_loaded)
     api.register_file_pre_save_processor(_on_file_pre_save)
