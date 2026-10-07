@@ -52,9 +52,9 @@ def main(argv: list[str] | None = None) -> int:
         print('mutagen not found; see scan_folder.py --help', file=sys.stderr)
         return 2
     load_plugin_package()
-    from shironet_lyrics.src.lyrics_export import LRC, TXT, Outcome, export_file
-    from shironet_lyrics.src.scanner import find_audio_files
-    from shironet_lyrics.src.tag_reader import AUDIO_EXTENSIONS
+    from shironet_lyrics.plugin.lyrics_export import LRC, TXT, Outcome, export_file
+    from shironet_lyrics.plugin.scanner import find_audio_files
+    from shironet_lyrics.plugin.tag_reader import AUDIO_EXTENSIONS
 
     stop = []
     signal.signal(signal.SIGINT, lambda signum, frame: stop.append(True))

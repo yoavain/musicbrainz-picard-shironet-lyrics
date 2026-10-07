@@ -1,5 +1,5 @@
-"""Shironet Lyrics plugin entry point. The code lives in src/."""
+"""Shironet Lyrics plugin entry point. The code lives in plugin/."""
 
-from .src.plugin import disable, enable
+from .plugin.plugin import disable, enable
 
 __all__ = ['disable', 'enable']

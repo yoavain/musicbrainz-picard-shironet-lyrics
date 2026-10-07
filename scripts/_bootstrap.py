@@ -2,8 +2,8 @@
 
 Used by the tests and by scripts/scan_folder.py.
 
-The plugin's __init__.py and src/plugin.py need a running Picard, so callers
-register the repo folder as a package without executing it. The modules in src/
+The plugin's __init__.py and plugin/plugin.py need a running Picard, so callers
+register the repo folder as a package without executing it. The modules in plugin/
 use relative imports and load normally inside that package.
 
 mutagen is not installed in the development Python, but Picard bundles it.

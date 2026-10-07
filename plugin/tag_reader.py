@@ -16,8 +16,6 @@ from mutagen.asf import ASFTags
 from mutagen.id3 import ID3
 from mutagen.mp4 import MP4Tags
 
-from .lyrics_cache import clean_lyrics
-
 
 # Picard joins multiple artist or title values with this separator.
 MULTI_VALUE_JOINER = '; '
@@ -65,9 +63,10 @@ def _join(values) -> str:
 
 
 def _first_lyrics(candidates) -> str:
+    """The first non-blank value, as written in the file: the server cleans lyrics."""
     for value in candidates:
-        text = clean_lyrics(str(value))
-        if text:
+        text = str(value)
+        if text.strip():
             return text
     return ''
 

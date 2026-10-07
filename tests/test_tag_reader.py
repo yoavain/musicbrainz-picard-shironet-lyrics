@@ -13,7 +13,7 @@ if HAVE_MUTAGEN:
     from mutagen.flac import FLAC
     from mutagen.id3 import ID3, TIT2, TPE1, USLT
 
-    from shironet_lyrics.src.tag_reader import read_tags
+    from shironet_lyrics.plugin.tag_reader import read_tags
 
 
 # One MPEG-1 Layer III frame: 128 kbit/s, 44.1 kHz, 417 bytes.
@@ -58,7 +58,7 @@ class ReadTagsTest(unittest.TestCase):
 
         self.assertEqual(result.artist, 'להקת הנח"ל')
         self.assertEqual(result.title, 'שיר לשלום')
-        self.assertEqual(result.lyrics, 'שורה ראשונה\nשורה שנייה')
+        self.assertEqual(result.lyrics, 'שורה ראשונה\r\nשורה שנייה')  # as written: the server cleans
 
     def test_mp3_prefers_uslt_without_description_and_joins_artists(self):
         path = self.path('b.mp3')
@@ -94,7 +94,7 @@ class ReadTagsTest(unittest.TestCase):
         result = read_tags(path)
 
         self.assertEqual((result.artist, result.title), ('עופרה חזה', 'שיר לשלום'))
-        self.assertEqual(result.lyrics, 'שורה 1\nשורה 2')
+        self.assertEqual(result.lyrics, 'שורה 1\nשורה 2\n')
 
     def test_flac_unsyncedlyrics(self):
         path = self.path('e.flac')
@@ -108,7 +108,7 @@ class ReadTagsTest(unittest.TestCase):
 
         self.assertEqual(read_tags(path).lyrics, 'from unsynced')
 
-    def test_flac_written_by_lyricsify_cli(self):
+    def test_flac_written_by_lyricsify_cli_is_returned_as_written(self):
         # lyricsify-cli stored UNSYNCEDLYRICS as "<language>||<lyrics>".
         path = self.path('h.flac')
         write_empty_flac(path)
@@ -119,7 +119,8 @@ class ReadTagsTest(unittest.TestCase):
         audio['UNSYNCEDLYRICS'] = ['heb||שם השיר\n\nביצוע: להקה\nמילים: כותב\n\nשורה ראשונה']
         audio.save()
 
-        self.assertEqual(read_tags(path).lyrics, 'שורה ראשונה')
+        # Returned as written; the server removes the prefix and the credits header.
+        self.assertEqual(read_tags(path).lyrics, 'heb||שם השיר\n\nביצוע: להקה\nמילים: כותב\n\nשורה ראשונה')
 
     def test_unknown_format(self):
         path = self.path('f.xyz')

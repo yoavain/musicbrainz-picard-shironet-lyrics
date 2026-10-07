@@ -21,7 +21,7 @@ from mutagen.asf import ASFTags
 from mutagen.id3 import ID3
 from mutagen.mp4 import MP4Tags
 
-from .lyrics_cache import clean_lyrics, strip_language_prefix
+from .lyrics_text import clean_lyrics, strip_language_prefix
 
 
 LRC = 'lrc'

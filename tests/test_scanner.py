@@ -6,197 +6,148 @@ import _support
 
 _support.load_plugin_package()
 
-from shironet_lyrics.src.lyrics_cache import LyricsCache  # noqa: E402
-from shironet_lyrics.src import shironet_queue as queue  # noqa: E402
-from shironet_lyrics.src.scanner import ScanStats, format_summary, scan_folder  # noqa: E402
-
+from shironet_lyrics.plugin.scan_state import ScanState  # noqa: E402
+from shironet_lyrics.plugin.scanner import format_summary, scan_folder  # noqa: E402
+from shironet_lyrics.plugin.server_client import Answer, ServerUnavailable  # noqa: E402
 
 EXTENSIONS = frozenset({'.mp3', '.flac'})
-# A Hebrew artist makes every test song Hebrew, so the scanner stores it.
-ARTIST = 'משינה'
 
 
-class Tags:
+class FileTags:
+    """What read_tags returns (the real one needs mutagen): artist, title, lyrics."""
+
     def __init__(self, artist, title, lyrics):
         self.artist, self.title, self.lyrics = artist, title, lyrics
 
 
-class FakeReader:
-    """Returns tags set per path; raises for paths in `failing`."""
+class FakeClient:
+    """Records calls; answers PUT and fetch from the given functions."""
 
-    def __init__(self):
-        self.tags = {}
-        self.failing = set()
+    def __init__(self, put=None, fetch=None):
         self.calls = []
+        self._put = put or (lambda song, lyrics: Answer(200, {'result': 'added'}))
+        self._fetch = fetch or (lambda song: Answer(202, {'status': 'queued', 'position': 1}))
 
-    def __call__(self, path):
-        self.calls.append(os.path.basename(path))
-        if path in self.failing:
-            raise OSError('cannot read')
-        return self.tags.get(path)
+    def put(self, song, lyrics, ref, replace):
+        self.calls.append(('put', song, lyrics, ref, replace))
+        return self._put(song, lyrics)
+
+    def fetch(self, song, priority):
+        self.calls.append(('fetch', song, priority))
+        return self._fetch(song)
 
 
 class ScanFolderTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.root = os.path.join(self.tmp.name, 'music')
-        os.makedirs(os.path.join(self.root, 'album'))
-        self.cache = LyricsCache(os.path.join(self.tmp.name, 'cache.sqlite3'))
-        self.reader = FakeReader()
+        self.root = self.tmp.name
+        self.state = ScanState(':memory:')
+        self.tags = {}
 
     def tearDown(self):
-        self.cache.close()
+        self.state.close()
         self.tmp.cleanup()
 
-    def add_file(self, name, tags, content=b'audio'):
-        path = os.path.join(self.root, 'album', name)
+    def add(self, name, tags):
+        path = os.path.join(self.root, name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, 'wb') as f:
-            f.write(content)
-        self.reader.tags[path] = tags
+            f.write(b'x')
+        self.tags[path] = tags
         return path
 
-    def scan(self, **kwargs):
-        self.reader.calls.clear()
-        return scan_folder(self.cache, self.root, self.reader, EXTENSIONS, **kwargs)
+    def read_tags(self, path):
+        value = self.tags[path]
+        if isinstance(value, Exception):
+            raise value
+        return value
 
-    def test_first_scan_stores_lyrics(self):
-        self.add_file('1.mp3', Tags(ARTIST, 'One', 'lyrics one'))
-        self.add_file('2.flac', Tags(ARTIST, 'Two', ''))
-        self.add_file('cover.jpg', None)
+    def scan(self, client, should_stop=None):
+        return scan_folder(self.state, client, self.root, self.read_tags, EXTENSIONS, should_stop=should_stop)
 
-        stats = self.scan()
+    def test_a_file_with_lyrics_is_sent_as_written_and_not_read_again(self):
+        path = self.add('a.mp3', FileTags('דן תורן', 'אוטו כחול', 'heb||שורה\r\n'))
+        client = FakeClient()
+        stats = self.scan(client)
+        self.assertEqual(client.calls, [('put', {'artist': 'דן תורן', 'title': 'אוטו כחול'}, 'heb||שורה\r\n', os.path.normcase(os.path.abspath(path)), False)])
+        self.assertEqual((stats.read, stats.with_lyrics, stats.added), (1, 1, 1))
+        again = FakeClient()
+        stats = self.scan(again)
+        self.assertEqual((stats.unchanged, again.calls), (1, []))
 
-        self.assertEqual((stats.found, stats.read, stats.with_lyrics, stats.added), (2, 2, 1, 1))
-        self.assertEqual(self.cache.get(ARTIST, 'one').lyrics, 'lyrics one')
-        self.assertEqual(sorted(self.reader.calls), ['1.mp3', '2.flac'])
-
-    def test_rescan_reads_only_new_and_changed_files(self):
-        changed = self.add_file('1.mp3', Tags(ARTIST, 'One', 'old'))
-        self.add_file('2.mp3', Tags(ARTIST, 'Two', 'two'))
-        self.scan()
-
-        with open(changed, 'ab') as f:
-            f.write(b' edited')
-        self.reader.tags[changed] = Tags(ARTIST, 'One', 'new')
-        self.add_file('3.mp3', Tags(ARTIST, 'Three', 'three'))
-
-        stats = self.scan()
-
-        self.assertEqual(sorted(self.reader.calls), ['1.mp3', '3.mp3'])
-        self.assertEqual((stats.unchanged, stats.read, stats.added, stats.replaced), (1, 2, 1, 1))
-        self.assertEqual(self.cache.get(ARTIST, 'One').lyrics, 'new')
-
-    def test_files_without_lyrics_are_not_read_again(self):
-        self.add_file('1.mp3', Tags(ARTIST, 'One', ''))
-        self.add_file('2.mp3', None)  # format the reader does not know
-        self.scan()
-        stats = self.scan()
-        self.assertEqual(self.reader.calls, [])
-        self.assertEqual(stats.unchanged, 2)
-
-    def test_conflict_between_two_files_keeps_the_first(self):
-        self.add_file('1.mp3', Tags(ARTIST, 'Song', 'first'))
-        second = self.add_file('2.mp3', Tags(ARTIST, 'Song (Live)', 'second'))
-
-        stats = self.scan()
-
-        self.assertEqual((stats.added, stats.conflicts), (1, 1))
-        self.assertEqual(stats.conflict_files, [second])
-        self.assertEqual(self.cache.get(ARTIST, 'Song').lyrics, 'first')
-
-    def test_unreadable_file_is_retried_next_time(self):
-        path = self.add_file('1.mp3', Tags(ARTIST, 'One', 'text'))
-        self.reader.failing.add(path)
-
-        stats = self.scan()
-        self.assertEqual((stats.errors, stats.read), (1, 0))
-        self.assertEqual(stats.error_samples[0][0], path)
-
-        self.reader.failing.clear()
-        stats = self.scan()
-        self.assertEqual((stats.errors, stats.added), (0, 1))
-
-    def test_missing_artist_or_title_is_skipped(self):
-        self.add_file('1.mp3', Tags('', 'שיר', 'text'))
-        stats = self.scan()
-        self.assertEqual((stats.with_lyrics, stats.skipped, stats.added), (1, 1, 0))
-
-    def test_non_hebrew_songs_are_not_cached(self):
-        self.add_file('1.mp3', Tags('R.E.M.', 'The One I Love', 'An English placeholder line'))
-        self.add_file('2.mp3', Tags('Mashina', 'At Lo Kmo Kulam', 'שורה לדוגמה בעברית'))
-
-        stats = self.scan()
-
-        self.assertEqual((stats.with_lyrics, stats.not_hebrew, stats.added), (2, 1, 1))
-        self.assertIsNone(self.cache.get('R.E.M.', 'The One I Love'))
-        self.assertIsNotNone(self.cache.get('Mashina', 'At Lo Kmo Kulam'))
-        self.assertEqual(self.scan().unchanged, 2)
-
-    def test_hebrew_songs_without_lyrics_are_queued(self):
-        self.add_file('1.mp3', Tags(ARTIST, 'בלי מילים', ''))
-        self.add_file('2.mp3', Tags('R.E.M.', 'The One I Love', ''))  # not Hebrew
-        self.add_file('3.mp3', Tags(ARTIST, 'עם מילים', 'text'))  # has lyrics
-        self.add_file('4.mp3', None)  # unknown format
-
-        stats = self.scan()
-
+    def test_a_file_without_lyrics_is_fetched_each_scan_from_the_recorded_names(self):
+        self.add('b.mp3', FileTags('דן תורן', 'טוב לי', ''))
+        client = FakeClient()
+        stats = self.scan(client)
+        self.assertEqual(client.calls, [('fetch', {'artist': 'דן תורן', 'title': 'טוב לי'}, 'bulk')])
         self.assertEqual(stats.queued, 1)
-        self.assertEqual(queue.next_pending(self.cache).title, 'בלי מילים')
+        again = FakeClient(fetch=lambda song: Answer(200, {'status': 'found', 'lyrics': 'שורה'}))
+        stats = self.scan(again)
+        self.assertEqual(again.calls, [('fetch', {'artist': 'דן תורן', 'title': 'טוב לי'}, 'bulk')])
+        self.assertEqual((stats.unchanged, stats.cached), (1, 1))
 
-    def test_unchanged_files_are_queued_from_the_database(self):
-        self.add_file('1.mp3', Tags(ARTIST, 'בלי מילים', ''))
-        self.scan()
-        self.cache.connection.execute('DELETE FROM shironet_queue')
+    def test_lyrics_the_server_skips_count_as_no_lyrics(self):
+        self.add('c.mp3', FileTags('דן תורן', 'שיר', 'instrumental'))
+        client = FakeClient(put=lambda song, lyrics: Answer(200, {'result': 'skipped'}))
+        stats = self.scan(client)
+        self.assertEqual([call[0] for call in client.calls], ['put', 'fetch'])
+        self.assertEqual(stats.queued, 1)
+        self.assertEqual(self.scan(FakeClient()).unchanged, 1)
 
-        stats = self.scan()
+    def test_answers_are_counted(self):
+        self.add('d1.mp3', FileTags('Band', 'Song', 'English words'))
+        self.add('d2.mp3', FileTags('אמן', 'קונפליקט', 'אחר'))
+        self.add('d3.mp3', FileTags('Band', 'Other', ''))
+        self.add('d4.mp3', FileTags('אמן', 'חסר', ''))
+        results = {'Song': 'not_hebrew', 'קונפליקט': 'conflict'}
+        fetches = {'Other': Answer(422, {'status': 'not_hebrew'}), 'חסר': Answer(404, {'status': 'not_found', 'retryAfter': 'x'})}
+        client = FakeClient(put=lambda song, lyrics: Answer(200, {'result': results[song['title']]}),
+                            fetch=lambda song: fetches[song['title']])
+        stats = self.scan(client)
+        self.assertEqual((stats.not_hebrew, stats.conflicts, stats.not_found), (2, 1, 1))
+        self.assertEqual(stats.conflict_files, [os.path.join(self.root, 'd2.mp3')])
 
-        self.assertEqual(self.reader.calls, [])  # not read again
-        self.assertEqual((stats.unchanged, stats.queued), (1, 1))
+    def test_a_file_without_a_name_is_recorded_without_a_call(self):
+        self.add('e.mp3', FileTags('', '', ''))
+        self.add('f.flac', None)  # unknown format
+        client = FakeClient()
+        self.scan(client)
+        self.assertEqual(client.calls, [])
+        self.assertEqual(self.scan(FakeClient()).unchanged, 2)
 
-    def test_cached_or_queued_songs_are_not_queued_again(self):
-        self.add_file('1.mp3', Tags(ARTIST, 'שיר', 'text'))
-        self.add_file('2.mp3', Tags(ARTIST, 'שיר', ''))  # the same song, no lyrics in this copy
-        self.add_file('3.mp3', Tags(ARTIST, 'שיר אחר', ''))
-        self.assertEqual(self.scan().queued, 1)
-        self.assertEqual(self.scan().queued, 0)
+    def test_an_unreadable_file_is_counted_and_read_again_next_time(self):
+        self.add('g.mp3', OSError('locked'))
+        stats = self.scan(FakeClient())
+        self.assertEqual((stats.errors, len(stats.error_samples)), (1, 1))
+        self.assertEqual(self.scan(FakeClient()).errors, 1)
 
-    def test_queueing_can_be_turned_off(self):
-        self.add_file('1.mp3', Tags(ARTIST, 'בלי מילים', ''))
-        self.assertEqual(self.scan(queue_missing=False).queued, 0)
-        self.assertIsNone(queue.next_pending(self.cache))
+    def test_the_server_going_away_stops_the_scan_and_keeps_what_was_answered(self):
+        self.add('h1.mp3', FileTags('אמן', 'ראשון', ''))
+        self.add('h2.mp3', FileTags('אמן', 'שני', ''))
+        answers = [Answer(202, {'status': 'queued'})]
 
-    def test_cancel_keeps_the_work_done(self):
-        for number in range(5):
-            self.add_file(f'{number}.mp3', Tags(ARTIST, f'Song {number}', f'text {number}'))
-        done = []
+        def fetch(song):
+            if not answers:
+                raise ServerUnavailable('connection refused')
+            return answers.pop()
 
-        stats = self.scan(progress=lambda index, total: done.append(index), should_stop=lambda: len(done) >= 2)
+        stats = self.scan(FakeClient(fetch=fetch))
+        self.assertIn('connection refused', stats.server_error)
+        self.assertEqual(stats.queued, 1)
+        second = self.scan(FakeClient())
+        self.assertEqual((second.unchanged, second.read), (1, 1))  # h2 was not recorded
 
+    def test_stop_request(self):
+        self.add('i1.mp3', FileTags('אמן', 'א', ''))
+        self.add('i2.mp3', FileTags('אמן', 'ב', ''))
+        stats = self.scan(FakeClient(), should_stop=lambda: True)
         self.assertTrue(stats.cancelled)
-        self.assertEqual(self.cache.count(), 2)
-        stats = self.scan()
-        self.assertEqual((stats.unchanged, stats.added), (2, 3))
+        self.assertEqual(stats.read, 0)
 
-    def test_progress_reports_every_file(self):
-        self.add_file('1.mp3', Tags(ARTIST, 'One', 'x'))
-        self.add_file('2.mp3', Tags(ARTIST, 'Two', 'y'))
-        calls = []
-        self.scan(progress=lambda index, total: calls.append((index, total)))
-        self.assertEqual(calls, [(1, 2), (2, 2)])
-
-
-class FormatSummaryTest(unittest.TestCase):
-    def test_summary(self):
-        stats = ScanStats(found=3, read=3, with_lyrics=2, not_hebrew=1, added=1)
-        text = format_summary(stats, 'C:/music', 10)
-        self.assertTrue(text.startswith('Scan finished: C:/music' + chr(10)))
-        self.assertIn('Not Hebrew (not cached): 1', text)
-        self.assertTrue(text.endswith('Cache now holds 10 songs.'))
-
-    def test_cancelled_and_unknown_count(self):
-        text = format_summary(ScanStats(cancelled=True), 'x', None)
-        self.assertTrue(text.startswith('Scan cancelled: x'))
-        self.assertIn('holds ? songs', text)
+    def test_summary_mentions_the_server_error(self):
+        self.add('j.mp3', FileTags('אמן', 'שיר', ''))
+        stats = self.scan(FakeClient(fetch=lambda song: (_ for _ in ()).throw(ServerUnavailable('down'))))
+        self.assertIn('down', format_summary(stats, self.root))
 
 
 if __name__ == '__main__':

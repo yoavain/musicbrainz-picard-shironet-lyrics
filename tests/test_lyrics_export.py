@@ -13,8 +13,8 @@ if HAVE_MUTAGEN:
     from mutagen.flac import FLAC
     from mutagen.id3 import ID3, SYLT, TIT2, USLT
 
-    from shironet_lyrics.src import lyrics_export
-    from shironet_lyrics.src.lyrics_export import (
+    from shironet_lyrics.plugin import lyrics_export
+    from shironet_lyrics.plugin.lyrics_export import (
         LRC,
         TXT,
         Outcome,
