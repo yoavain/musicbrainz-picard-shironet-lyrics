@@ -175,11 +175,15 @@ export function markError(store: Store, row: QueueRow, detail: string, failedRet
   }
 }
 
-/** Sets songs not found back to pending now, without waiting for their retry time. */
+/**
+ * Sets songs not found back to pending now, without waiting for their retry time. Calibration
+ * misses too: a calibration sample is never retried on its own, and after a search change
+ * it should be measured with the current code. Each row keeps its purpose.
+ */
 export function requeueNotFound(store: Store, now: string): number {
   const { changes } = store.db.prepare(
     "UPDATE queue SET status = 'pending', attempts = 0, lyrics_url = NULL, retry_after = NULL, updated_at = ? "
-    + "WHERE status = 'not_found' AND purpose = 'fetch'",
+    + "WHERE status = 'not_found'",
   ).run(now);
   return Number(changes);
 }

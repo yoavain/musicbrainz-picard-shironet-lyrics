@@ -108,7 +108,7 @@ Server commands (`node src/cli.ts <command>` in `server/`):
 |---|---|
 | `serve` | Runs the server (what `npm start` does). |
 | `status` | Queue, pace, browser, recent requests and calibration, from the running server or the database. |
-| `requeue-not-found` | Searches songs not found again now instead of in a week. |
+| `requeue-not-found` | Searches songs not found again now instead of in a week; calibration samples that were not found are measured again. |
 | `enqueue-calibration N` | Re-fetches N songs whose lyrics came from your files and compares (checks the parser). |
 | `check-browser` | With the server stopped: the browser setup against live Shironet, plus a leak check. |
 | `import <old cache>` | One-time move from the old Python plugin cache into an empty data folder. |

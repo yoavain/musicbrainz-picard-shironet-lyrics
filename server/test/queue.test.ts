@@ -67,6 +67,19 @@ describe('queue operations for the worker', () => {
     const row = queue.find(store, [miss]);
     assert.deepEqual([row?.status, row?.attempts, row?.retryAfter, row?.lyricsUrl], ['pending', 0, null, null]);
   });
+  test('requeueNotFound also resets calibration misses; they stay calibration samples', () => {
+    const insert = store.db.prepare(
+      "INSERT INTO queue (artist_key, title_key, artist, title, purpose, status, result, added_at, updated_at) "
+      + "VALUES (?, ?, ?, ?, 'calibrate', ?, ?, ?, ?)",
+    );
+    insert.run('יהודה פוליקר', 'כשתגדל', 'יהודה פוליקר', 'כשתגדל', 'not_found', 'no match in 10 results', T0, T0);
+    insert.run('משינה', 'אופטיקאי מדופלם', 'משינה', 'אופטיקאי מדופלם', 'done', 'similarity 1.00', T0, T0);
+    assert.equal(queue.requeueNotFound(store, T1), 1);
+    const sample = queue.nextCalibration(store);
+    assert.deepEqual([sample?.title, sample?.purpose, sample?.status], ['כשתגדל', 'calibrate', 'pending']);
+    const done = store.db.prepare("SELECT status FROM queue WHERE title = 'אופטיקאי מדופלם'").get() as { status: string };
+    assert.equal(done.status, 'done');
+  });
   test('request log keeps gaps, newest first, and prunes', () => {
     queue.logRequest(store, { at: 100, kind: 'search', outcome: 'ok', httpStatus: null, detail: null, url: 'u1', artist: 'אמן', title: 'שיר' });
     queue.logRequest(store, { at: 112.5, kind: 'lyrics', outcome: 'challenge', httpStatus: null, detail: 'perfdrive', url: 'u2', artist: 'אמן', title: 'שיר' });
