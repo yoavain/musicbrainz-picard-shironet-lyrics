@@ -75,6 +75,11 @@ export function hasHebrew(text: string | null | undefined): boolean {
   return !!text && HEBREW_LETTER.test(text);
 }
 
+/** True when an artist or a title has a Hebrew letter: the rule for searching Shironet. */
+export function hasHebrewName(names: Array<string | null | undefined>): boolean {
+  return names.some((name) => hasHebrew(name));
+}
+
 /**
  * A song is Hebrew when a name has a Hebrew letter, the language is a Hebrew code,
  * or the lyrics have more Hebrew letters than Latin letters.

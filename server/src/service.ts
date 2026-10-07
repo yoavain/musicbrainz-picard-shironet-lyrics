@@ -2,7 +2,7 @@
 
 import type { Entry, Store } from './store.ts';
 import { SOURCE_EMBEDDED, isoTime } from './store.ts';
-import { cacheKey, cleanLyrics, isHebrewSong } from './text.ts';
+import { cacheKey, cleanLyrics, hasHebrewName, isHebrewSong } from './text.ts';
 import * as queue from './queue.ts';
 import type { Name, Priority } from './queue.ts';
 import { enqueueCalibration } from './calibration.ts';
@@ -84,7 +84,9 @@ export class LyricsService {
     const entry = this.store.lookup(names);
     if (entry) return { status: 'found', entry };
     if (names.length === 0) return { status: 'no_name' };
-    if (!isHebrewSong(allNames(song), { language: song.language })) return { status: 'not_hebrew' };
+    // Shironet is searched only for a Hebrew letter in an artist or title; a language tag
+    // alone is not enough (a transliterated title would not match Shironet's).
+    if (!hasHebrewName(allNames(song))) return { status: 'not_hebrew' };
     const now = isoTime(this.now());
     const answer = this.store.transaction((): FetchAnswer => {
       let row = queue.find(this.store, names);
@@ -98,7 +100,13 @@ export class LyricsService {
           queue.reset(this.store, row, now);
           row = { ...row, status: 'pending', retryAfter: null };
         }
-        if (row.purpose !== 'fetch' || row.status === 'done') {
+        if (row.status === 'skipped') {
+          // Skipped under its own names; the new Hebrew name may now be stored as the alternate.
+          const fresh = queue.find(this.store, [row])!;
+          if (!hasHebrewName([fresh.artist, fresh.title, fresh.altArtist, fresh.altTitle])) return { status: 'not_hebrew' };
+          queue.reset(this.store, fresh, now);
+          row = { ...fresh, status: 'pending', retryAfter: null };
+        } else if (row.purpose !== 'fetch' || row.status === 'done') {
           queue.reset(this.store, row, now);
         } else if ((row.status === 'not_found' || row.status === 'failed') && row.retryAfter !== null && row.retryAfter > now) {
           return { status: row.status, retryAfter: row.retryAfter };

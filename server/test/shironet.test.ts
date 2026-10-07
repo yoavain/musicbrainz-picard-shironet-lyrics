@@ -1,8 +1,8 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  BASE_URL, interpretLyrics, interpretSearch, isChallengeUrl, isLyricsUrl, nextPageUrl, pickResult, searchQuery,
-  searchUrl, workId,
+  BASE_URL, artistSearchUrl, interpretArtistSearch, interpretLyrics, interpretSearch, interpretWorks, isChallengeUrl,
+  isLyricsUrl, nextPageUrl, pickArtist, pickResult, searchQuery, searchUrl, workId, worksUrl,
 } from '../src/shironet.ts';
 import type { ExtractedPage, SearchResult } from '../src/shironet.ts';
 
@@ -141,5 +141,62 @@ describe('interpretLyrics', () => {
   test('no lyrics element, or only a placeholder, gives null', () => {
     assert.equal(interpretLyrics(page({})), null);
     assert.equal(interpretLyrics(page({ lyrics: { song: 'שיר', singer: 'זמר', text: 'instrumental' } })), null);
+  });
+});
+
+function artistPage(links: Array<[string, string | null]>, nextPageHref: string | null = null): ExtractedPage {
+  return {
+    url: `${BASE_URL}/searchArtists?q=x`, title: '', challenge: false, lyrics: null, nextPageHref,
+    links: links.map(([text, href]) => ({ text, href })),
+  };
+}
+function worksPage(works: Array<[string, string | null]>): ExtractedPage {
+  return {
+    url: worksUrl(41), title: '', challenge: false, lyrics: null, links: [],
+    works: works.map(([text, href]) => ({ text, href })),
+  };
+}
+
+describe('artist route', () => {
+  test('URLs', () => {
+    assert.equal(artistSearchUrl('אביתר בנאי'), `${BASE_URL}/searchArtists?q=%D7%90%D7%91%D7%99%D7%AA%D7%A8%20%D7%91%D7%A0%D7%90%D7%99`);
+    assert.equal(artistSearchUrl('<b>להקה</b>'), artistSearchUrl(' b להקה /b '));
+    assert.equal(worksUrl(41), `${BASE_URL}/artist?type=works&lang=1&prfid=41`);
+  });
+  test('interpretArtistSearch: artist links with their prfid, page order', () => {
+    const page = artistPage([
+      ['אביתר בנאי', '/artist?lang=1&prfid=41'],
+      ['אביתר בנאי ומאיר בנאי', '/artist?lang=1&prfid=3126'],
+      ['broken', null],
+      ['no id', '/artist?lang=1'],
+      ['other site', 'https://example.com/artist?prfid=9'],
+    ]);
+    assert.deepEqual(interpretArtistSearch(page), [
+      { name: 'אביתר בנאי', prfid: 41 },
+      { name: 'אביתר בנאי ומאיר בנאי', prfid: 3126 },
+    ]);
+  });
+  test('pickArtist: exact after normalization only; a duet is not the artist', () => {
+    const artists = [{ name: 'אביתר בנאי ומאיר בנאי', prfid: 3126 }, { name: 'אביתר  בנאי', prfid: 41 }];
+    assert.deepEqual(pickArtist(artists, 'אביתר בנאי'), { name: 'אביתר  בנאי', prfid: 41 });
+    assert.equal(pickArtist(artists, 'בנאי'), null);
+    assert.equal(pickArtist(artists, ''), null);
+  });
+  test('interpretWorks: song titles with absolute lyrics URLs; other links dropped', () => {
+    const page = worksPage([
+      ['\tאב הרחמן', '/artist?type=lyrics&lang=1&prfid=41&wrkid=23571'],
+      ['בשבילך', '/artist?type=lyrics&lang=1&prfid=41&wrkid=14352'],
+      ['chords', '/artist?type=chords&lang=1&prfid=41&wrkid=12'],
+      ['broken', null],
+    ]);
+    assert.deepEqual(interpretWorks(page), [
+      { title: 'אב הרחמן', url: `${BASE_URL}/artist?type=lyrics&lang=1&prfid=41&wrkid=23571` },
+      { title: 'בשבילך', url: `${BASE_URL}/artist?type=lyrics&lang=1&prfid=41&wrkid=14352` },
+    ]);
+    assert.deepEqual(interpretWorks({ ...page, works: undefined }), []);
+  });
+  test('works pages: the next link is followed like the search pages', () => {
+    const page = { ...worksPage([]), nextPageHref: '/artist?lang=1&prfid=41&type=works&page=2' };
+    assert.equal(nextPageUrl(page), `${BASE_URL}/artist?lang=1&prfid=41&type=works&page=2`);
   });
 });

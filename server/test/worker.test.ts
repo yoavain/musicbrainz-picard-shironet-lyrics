@@ -119,6 +119,16 @@ describe('Worker', () => {
     assert.ok(reader.calls[1].at - reader.calls[0].at >= 5000);
     assert.equal(queue.recentRequests(store, 10).length, 2);
   });
+  test('a row with no Hebrew name is skipped: no request, no CAPTCHA handling, the queue moves on', async () => {
+    queue.insert(store, [{ artist: 'Band', title: 'Song' }], 'interactive', '2026-10-07T09:00:00+00:00');
+    enqueue('שיר');
+    const reader = new FakeReader(clock, { [searchUrl('שיר')]: okSearch('שיר', 'להקה'), [LYRICS_URL]: okLyrics('שורה') });
+    make(reader).start();
+    await until(() => store.count() === 1, 'the Hebrew song stored');
+    assert.equal(queue.find(store, [{ artist: 'Band', title: 'Song' }])?.status, 'skipped');
+    assert.deepEqual(reader.calls.map((call) => call.url), [searchUrl('שיר'), LYRICS_URL]);
+    assert.deepEqual(notes, []);
+  });
   test('a solved CAPTCHA: notified, the song is retried, no attempt counted', async () => {
     enqueue('שיר');
     const reader = new FakeReader(clock, {

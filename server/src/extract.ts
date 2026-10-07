@@ -21,13 +21,17 @@ export const EXTRACT_SOURCE = `(() => {
   };
   const lyricsElement = document.querySelector('span.artist_lyrics_text');
   const links = [...document.querySelectorAll('a.search_link_name_big')];
+  // An artist's works page: the alphabetical list. The player panel reuses the class; its
+  // links carry a title attribute and sit in the clipsPlaylist rows.
+  const works = [...document.querySelectorAll('a.artist_player_songlist')]
+    .filter((a) => !a.hasAttribute('title') && !a.closest('[id^="clipsPlaylist"]'));
   const html = document.documentElement ? document.documentElement.outerHTML : '';
-  const hasContent = !!lyricsElement || links.length > 0;
+  const hasContent = !!lyricsElement || links.length > 0 || works.length > 0;
   // Every real Shironet page (the home page too) loads the bot-manager script, so the
   // script alone is no sign of a challenge; a page with Shironet's own title is not one.
   const shironetTitle = document.title.includes('שירונט');
-  // Search pages show 10 results; the paging bar ends with a "הבא >>" (next) link.
-  const nextLink = [...document.querySelectorAll('a.search_nav_bar')].find((a) => a.textContent.includes('הבא'));
+  // Search pages show 10 results, works pages 30; their paging bar ends with a "הבא >>" (next) link.
+  const nextLink = [...document.querySelectorAll('a.search_nav_bar, a.artist_nav_bar')].find((a) => a.textContent.includes('הבא'));
   return {
     url: location.href,
     title: document.title,
@@ -36,6 +40,7 @@ export const EXTRACT_SOURCE = `(() => {
       || (html.includes('perfdrive.com') && !hasContent && !shironetTitle),
     links: links.map((a) => ({ text: textOf(a), href: a.getAttribute('href') })),
     nextPageHref: nextLink ? nextLink.getAttribute('href') : null,
+    works: works.map((a) => ({ text: textOf(a), href: a.getAttribute('href') })),
     lyrics: lyricsElement ? {
       song: textOf(document.querySelector('h1.artist_song_name_txt')),
       singer: textOf(document.querySelector('a.artist_singer_title')),

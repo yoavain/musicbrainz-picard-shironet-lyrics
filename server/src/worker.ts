@@ -206,6 +206,8 @@ export class Worker {
       if (outcome === 'done' || outcome === 'not_found') {
         if (row.purpose === 'fetch') countFetch(this.store);
         else await this.checkCalibrationAlert();
+      } else if (outcome === 'skipped') {
+        // No request was made: no pace, no count.
       } else if (outcome === 'error') {
         await this.clock.sleep(this.pacer.onError() * 1000, this.stopController.signal);
       } else {

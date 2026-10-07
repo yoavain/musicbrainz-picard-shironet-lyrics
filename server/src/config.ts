@@ -28,7 +28,8 @@ export interface BrowserConfig {
 }
 
 export type WorkerConfig = Pick<WorkerOptions,
-  'missTtlHours' | 'failedRetryHours' | 'maxAttempts' | 'maxSearchPages' | 'calibrationEvery' | 'calibrationGapDays'
+  'missTtlHours' | 'failedRetryHours' | 'maxAttempts' | 'maxSearchPages' | 'maxWorksPages' | 'artistRefreshDays'
+  | 'calibrationEvery' | 'calibrationGapDays'
   | 'calibrationAlertMedian' | 'requestLogDays'>;
 
 export interface Config {
@@ -167,6 +168,8 @@ export function loadConfig(
     failedRetryHours: num(workerFile, 'worker', 'failedRetryHours', 24, 1, 24 * 365),
     maxAttempts: num(workerFile, 'worker', 'maxAttempts', 5, 1, 100, true),
     maxSearchPages: num(workerFile, 'worker', 'maxSearchPages', 5, 1, 20, true),
+    maxWorksPages: num(workerFile, 'worker', 'maxWorksPages', 40, 1, 200, true),
+    artistRefreshDays: num(workerFile, 'worker', 'artistRefreshDays', 30, 1, 3650),
     calibrationEvery: num(workerFile, 'worker', 'calibrationEvery', 50, 0, 100_000, true),
     calibrationGapDays: num(workerFile, 'worker', 'calibrationGapDays', 90, 1, 3650),
     calibrationAlertMedian: num(workerFile, 'worker', 'calibrationAlertMedian', 0.8, 0, 1),

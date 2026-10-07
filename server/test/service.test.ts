@@ -43,8 +43,21 @@ describe('LyricsService', () => {
     assert.deepEqual(service.fetch({ artist: 'R.E.M.', title: 'The One I Love' }, 'bulk'), { status: 'not_hebrew' });
     assert.equal(queue.counts(store).length, 0);
   });
-  test('a Hebrew language tag makes a transliterated song Hebrew', () => {
-    assert.equal(service.fetch({ artist: 'Mashina', title: 'Rakevet', language: 'heb' }, 'bulk').status, 'queued');
+  test('a Hebrew language tag alone is not enough to search Shironet', () => {
+    assert.deepEqual(service.fetch({ artist: 'Mashina', title: 'Rakevet', language: 'heb' }, 'bulk'), { status: 'not_hebrew' });
+  });
+  test('a Hebrew artist with an English title counts, and the other way round', () => {
+    assert.equal(service.fetch({ artist: 'משינה', title: 'Rakevet' }, 'bulk').status, 'queued');
+    assert.equal(service.fetch({ artist: 'Mashina', title: 'רכבת' }, 'bulk').status, 'queued');
+    assert.equal(service.fetch({ artist: 'Mashina', title: 'Rakevet', alt: { artist: 'משינה', title: 'Rakevet' } }, 'bulk').status, 'queued');
+  });
+  test('a skipped row comes back when a Hebrew name arrives', () => {
+    queue.insert(store, [{ artist: 'Mashina', title: 'Rakevet' }], 'bulk', '2026-10-06T10:00:00+00:00');
+    const row = queue.find(store, [{ artist: 'Mashina', title: 'Rakevet' }])!;
+    queue.markSkipped(store, row, 'no Hebrew name', '2026-10-06T10:00:00+00:00');
+    const answer = service.fetch({ artist: 'Mashina', title: 'Rakevet', alt: { artist: 'משינה', title: 'רכבת' } }, 'bulk');
+    assert.equal(answer.status, 'queued');
+    assert.equal(queue.find(store, [{ artist: 'Mashina', title: 'Rakevet' }])?.status, 'pending');
   });
   test('names with no usable key answer no_name', () => {
     assert.deepEqual(service.fetch({ artist: '!!!', title: '\u05B8' }, 'bulk'), { status: 'no_name' });

@@ -22,8 +22,21 @@ export interface ExtractedPage {
   links: ExtractedLink[];
   /** null when the page has no span.artist_lyrics_text. */
   lyrics: { song: string; singer: string; text: string } | null;
-  /** The href of the search page's "next" link (a.search_nav_bar "הבא"), as written; absent on other pages. */
+  /** The href of the "next" link (a.search_nav_bar or a.artist_nav_bar "הבא"), as written. */
   nextPageHref?: string | null;
+  /** An artist's works page: the songs of the alphabetical list (a.artist_player_songlist, not the player panel). */
+  works?: ExtractedLink[];
+}
+
+export interface ArtistResult {
+  name: string;
+  /** Shironet's id of the performer. */
+  prfid: number;
+}
+
+export interface Work {
+  title: string;
+  url: string;
 }
 
 export interface SearchResult {
@@ -48,6 +61,16 @@ export function searchQuery(title: string): string {
 
 export function searchUrl(title: string): string {
   return `${BASE_URL}/searchSongs?q=${encodeURIComponent(searchQuery(title))}&type=lyrics`;
+}
+
+/** Artist search; its results are a.search_link_name_big links to /artist?lang=1&prfid=N. */
+export function artistSearchUrl(name: string): string {
+  return `${BASE_URL}/searchArtists?q=${encodeURIComponent(searchQuery(name))}`;
+}
+
+/** An artist's songs, alphabetical, 30 per page. */
+export function worksUrl(prfid: number): string {
+  return `${BASE_URL}/artist?type=works&lang=1&prfid=${prfid}`;
 }
 
 function parseUrl(url: string): URL | null {
@@ -116,6 +139,52 @@ export function interpretSearch(page: ExtractedPage): SearchResult[] {
     results.push({ title: singleLine(song.text), artist: singleLine(artist.text), url });
   }
   return results;
+}
+
+function shironetUrl(href: string | null): URL | null {
+  if (!href) return null;
+  const url = parseUrl(new URL(href, BASE_URL).toString());
+  return url && (url.hostname === HOST || url.hostname.endsWith(`.${HOST}`)) ? url : null;
+}
+
+/** Artists of an artist search page, in page order. */
+export function interpretArtistSearch(page: ExtractedPage): ArtistResult[] {
+  const artists: ArtistResult[] = [];
+  for (const link of page.links) {
+    let url: URL | null;
+    try {
+      url = shironetUrl(link.href);
+    } catch {
+      continue;
+    }
+    const prfid = Number(url?.searchParams.get('prfid'));
+    if (!url || url.pathname !== '/artist' || !Number.isInteger(prfid) || prfid <= 0) continue;
+    artists.push({ name: singleLine(link.text), prfid });
+  }
+  return artists;
+}
+
+/** The artist with exactly this name after normalization, or null. A duet ("X ו-Y") is another artist. */
+export function pickArtist(artists: ArtistResult[], name: string | null | undefined): ArtistResult | null {
+  const want = normalize(name);
+  if (!want) return null;
+  return artists.find((artist) => normalize(artist.name) === want) ?? null;
+}
+
+/** Songs of a works page, with absolute lyrics URLs, in page order. */
+export function interpretWorks(page: ExtractedPage): Work[] {
+  const works: Work[] = [];
+  for (const link of page.works ?? []) {
+    let url: URL | null;
+    try {
+      url = shironetUrl(link.href);
+    } catch {
+      continue;
+    }
+    if (!url || !isLyricsUrl(url.toString())) continue;
+    works.push({ title: singleLine(link.text), url: url.toString() });
+  }
+  return works;
 }
 
 /** Song name, performer and cleaned lyrics of a lyrics page, or null without lyrics. */

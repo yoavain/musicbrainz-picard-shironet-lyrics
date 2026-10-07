@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS queue (
 CREATE TABLE IF NOT EXISTS requests (
     id          INTEGER PRIMARY KEY,
     at          REAL NOT NULL,                 -- Unix time, seconds
-    kind        TEXT NOT NULL,                 -- 'search' | 'lyrics' | 'home'
+    kind        TEXT NOT NULL,                 -- 'search' | 'lyrics' | 'home' | 'artist' | 'works'
     outcome     TEXT NOT NULL,                 -- 'ok' | 'challenge' | 'error'
     http_status INTEGER,
     gap         REAL,

@@ -20,8 +20,29 @@ export interface Migration {
   up(db: DatabaseSync): void;
 }
 
-/** The steps, in order. Empty: the database is still at the base schema. */
-export const MIGRATIONS: readonly Migration[] = [];
+/** The steps, in order. */
+export const MIGRATIONS: readonly Migration[] = [
+  {
+    to: 2,
+    description: 'artist cache: Shironet performer ids and their works lists (TODO #3)',
+    up: (db) => db.exec(`
+      CREATE TABLE artists (
+          artist_key  TEXT PRIMARY KEY,        -- normalized name as searched
+          prfid       INTEGER,                 -- null: no artist with this exact name
+          name        TEXT,                    -- Shironet's spelling
+          searched_at TEXT NOT NULL,
+          works_at    TEXT                     -- when the works list was last read in full
+      ) WITHOUT ROWID;
+      CREATE TABLE artist_works (
+          prfid     INTEGER NOT NULL,
+          title_key TEXT NOT NULL,
+          title     TEXT NOT NULL,
+          url       TEXT NOT NULL,
+          PRIMARY KEY (prfid, title_key, url)
+      ) WITHOUT ROWID;
+    `),
+  },
+];
 
 export function checkMigrations(migrations: readonly Migration[]): void {
   migrations.forEach((migration, index) => {

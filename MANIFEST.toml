@@ -15,8 +15,8 @@ the lyrics cache and fetches from Shironet with a real browser. Set the server U
 - **Tools > Shironet Lyrics > Scan folder for lyrics** does the same for a whole folder;
   a rescan reads only new and changed files.
 
-The server fetches only Hebrew songs: a Hebrew letter in the artist or title, or a Hebrew
-language tag. Nothing is written to your files until you save.
+The server fetches only Hebrew songs: a Hebrew letter in the artist or the title (a
+Hebrew artist with an English title counts). Nothing is written to your files until you save.
 """
 api = ["3.0"]
 authors = ["yoavain"]

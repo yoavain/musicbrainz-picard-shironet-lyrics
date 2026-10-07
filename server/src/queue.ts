@@ -4,7 +4,8 @@ import type { Store } from './store.ts';
 import { cacheKey } from './text.ts';
 
 export type Priority = 'interactive' | 'bulk';
-export type QueueStatus = 'pending' | 'done' | 'not_found' | 'failed';
+// skipped: never searched (no Hebrew letter in any name); final, and never due.
+export type QueueStatus = 'pending' | 'done' | 'not_found' | 'failed' | 'skipped';
 export type Purpose = 'fetch' | 'calibrate';
 
 export interface Name {
@@ -161,6 +162,10 @@ export function markNotFound(store: Store, row: QueueRow, result: string, retryA
   updateRow(store, row, "status = 'not_found', result = ?, attempts = attempts + 1, retry_after = ?", [result, retryAfter], now);
 }
 
+export function markSkipped(store: Store, row: QueueRow, reason: string, now: string): void {
+  updateRow(store, row, "status = 'skipped', result = ?, retry_after = NULL", [reason], now);
+}
+
 /** One failed attempt. With a retry time the row becomes 'failed' until then. */
 export function markError(store: Store, row: QueueRow, detail: string, failedRetryAfter: string | null, now: string): void {
   if (failedRetryAfter === null) {
@@ -181,7 +186,7 @@ export function requeueNotFound(store: Store, now: string): number {
 
 export interface RequestEntry {
   at: number;
-  kind: 'search' | 'lyrics' | 'home';
+  kind: 'search' | 'lyrics' | 'home' | 'artist' | 'works';
   outcome: 'ok' | 'challenge' | 'error';
   httpStatus: number | null;
   detail: string | null;

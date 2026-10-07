@@ -11,7 +11,7 @@ import { pathToFileURL } from 'node:url';
 import { loadConfig } from '../src/config.ts';
 import { openChromeSession } from '../src/reader.ts';
 import type { BrowserSession } from '../src/reader.ts';
-import { interpretLyrics, interpretSearch } from '../src/shironet.ts';
+import { BASE_URL, interpretArtistSearch, interpretLyrics, interpretSearch, interpretWorks } from '../src/shironet.ts';
 import { isAlive } from '../src/processes.ts';
 import { silentLogger } from '../src/notifier.ts';
 import { RECORD_FILE } from '../src/chrome.ts';
@@ -48,6 +48,21 @@ describe('real Chrome session (incognito context)', () => {
     assert.equal(page.nextPageHref, '?q=%D7%A9%D7%99%D7%A8+%D7%9C%D7%A9%D7%9C%D7%95%D7%9D&type=lyrics&page=2');
     const lyrics = await session.navigateAndExtract(fixture('shironet_lyrics.html'), signal);
     assert.equal(lyrics.nextPageHref, null);
+  });
+  test('artist search page: the artists with their prfid, and the next link', async () => {
+    const page = await session.navigateAndExtract(fixture('shironet_artist_search.html'), signal);
+    assert.deepEqual(interpretArtistSearch(page), [{ name: 'אמן בדוי', prfid: 41 }, { name: 'אמן בדוי ואחיו', prfid: 3126 }]);
+    assert.equal(page.nextPageHref, '/servlet/com.dic.shironet.site.performers.servletSearch?q=x&page=2');
+    assert.equal(page.challenge, false);
+  });
+  test('works page: the alphabetical list only (not the player panel), and the next link', async () => {
+    const page = await session.navigateAndExtract(fixture('shironet_works.html'), signal);
+    assert.deepEqual(interpretWorks(page), [
+      { title: 'שיר ראשון', url: `${BASE_URL}/artist?type=lyrics&lang=1&prfid=41&wrkid=23571` },
+      { title: 'שיר "שני"', url: `${BASE_URL}/artist?type=lyrics&lang=1&prfid=41&wrkid=14352` },
+    ]);
+    assert.equal(page.nextPageHref, '/artist?lang=1&prfid=41&type=works&page=2');
+    assert.equal(page.challenge, false);
   });
   test('lyrics page: only <br> breaks lines; entities decoded', async () => {
     const page = interpretLyrics(await session.navigateAndExtract(fixture('shironet_lyrics.html'), signal));

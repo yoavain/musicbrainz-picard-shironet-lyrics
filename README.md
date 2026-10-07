@@ -30,14 +30,20 @@ blocked, a visible browser gets through. That is why fetching lives in the serve
 - **Your own lyrics feed the cache.** Every file Picard loads or saves sends its lyrics to
   the server. Lyrics you edit and save replace the cached ones; otherwise the cache keeps
   its lyrics when a file has different ones (a conflict, named in the log).
-- **Hebrew songs only.** The server fetches a song only when its artist or title has a
-  Hebrew letter (either name: the file's own tags or the MusicBrainz name), or its language
-  tag is Hebrew. Other songs are counted as "Not Hebrew".
+- **Hebrew songs only.** The server fetches a song only when its artist or its title has a
+  Hebrew letter (either name: the file's own tags or the MusicBrainz name). A Hebrew artist
+  with an English title counts; a language tag alone does not. Other songs are counted as
+  "Not Hebrew". Lyrics your files already have are cached when the names or the lyrics are
+  Hebrew.
 - **Loose cache key, exact Shironet match.** The cache key ignores niqqud, punctuation,
   direction marks, "feat." parts and version suffixes such as "(Live)" or "(בהופעה חיה)".
-  Matching against Shironet's search results stays exact on the title; a song reported
-  "not found" usually has a title spelled differently from Shironet's — fix the title in
-  the tags and look it up again.
+  Matching against Shironet stays exact on the title; a song reported "not found" usually
+  has a title spelled differently from Shironet's — fix the title in the tags and look it
+  up again.
+- **Two ways to find a song.** The server searches Shironet by title (up to 5 result
+  pages). When that finds nothing, it looks the artist up (exact name) and reads the
+  artist's whole song list; a common title such as "בשבילך" is found there. Each artist's
+  list is kept for 30 days, so the other songs of that artist cost no search at all.
 - **Folder scan.** Tools > Shironet Lyrics > *Scan folder for lyrics...*, or
   `scripts/scan_folder.py` without Picard. A rescan reads only new and changed files.
 

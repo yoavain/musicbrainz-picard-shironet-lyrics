@@ -49,6 +49,16 @@ describe('queue operations for the worker', () => {
     const failed = queue.find(store, [row]);
     assert.deepEqual([failed?.status, failed?.attempts, failed?.retryAfter], ['failed', 2, '2026-10-08T11:00:00+00:00']);
   });
+  test('skipped rows are never due and stay skipped on requeue', () => {
+    queue.insert(store, [{ artist: 'Band', title: 'Song' }], 'bulk', '2026-10-07T10:00:00+00:00');
+    const row = queue.find(store, [{ artist: 'Band', title: 'Song' }])!;
+    queue.markSkipped(store, row, 'no Hebrew name', '2026-10-07T10:00:00+00:00');
+    const after = queue.find(store, [row])!;
+    assert.deepEqual([after.status, after.retryAfter], ['skipped', null]);
+    assert.equal(queue.nextDue(store, '2030-01-01T00:00:00+00:00'), undefined);
+    assert.equal(queue.dueCount(store, '2030-01-01T00:00:00+00:00'), 0);
+    assert.equal(queue.requeueNotFound(store, '2026-10-07T10:00:00+00:00'), 0);
+  });
   test('requeueNotFound resets misses only', () => {
     const miss = add('חסר', 'bulk', T0);
     queue.markNotFound(store, miss, 'no match', '2026-10-14T10:00:00+00:00', T0);

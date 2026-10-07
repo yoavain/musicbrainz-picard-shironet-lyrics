@@ -46,7 +46,8 @@ describe('config', () => {
     assert.equal(config.apiToken, null);
     assert.deepEqual(config.pace, { startInterval: 10, minInterval: 5 });
     assert.deepEqual(config.worker, {
-      missTtlHours: 168, failedRetryHours: 24, maxAttempts: 5, maxSearchPages: 5, calibrationEvery: 50,
+      missTtlHours: 168, failedRetryHours: 24, maxAttempts: 5, maxSearchPages: 5, maxWorksPages: 40, artistRefreshDays: 30,
+      calibrationEvery: 50,
       calibrationGapDays: 90, calibrationAlertMedian: 0.8, requestLogDays: 90,
     });
     assert.deepEqual(config.notify, { windows: false, ntfyUrl: null });
