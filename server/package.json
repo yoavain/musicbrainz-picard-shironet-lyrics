@@ -1,0 +1,23 @@
+{
+  "name": "shironet-lyrics-server",
+  "version": "0.1.0",
+  "description": "Lyrics cache and Shironet fetcher for the Shironet Lyrics Picard plugin.",
+  "private": true,
+  "license": "GPL-2.0-or-later",
+  "type": "module",
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "start": "node src/cli.ts serve",
+    "test": "node --test \"test/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "fastify": "5.12.5"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.2",
+    "typescript": "7.0.2"
+  }
+}

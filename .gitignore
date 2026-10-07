@@ -7,3 +7,4 @@ shironet-cookies.txt
 /docs/plan/
 /.idea/
 /.qodo/
+/server/node_modules/
