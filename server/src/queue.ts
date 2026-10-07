@@ -21,6 +21,7 @@ export interface QueueRow {
   status: QueueStatus;
   priority: Priority;
   attempts: number;
+  lyricsUrl: string | null;
   retryAfter: string | null;
   altArtist: string | null;
   altTitle: string | null;
@@ -31,17 +32,19 @@ export interface QueueRow {
 // A miss or failure without a retry time is due at once, as the service already answers.
 export const DUE_CONDITION = "(status = 'pending' OR (status IN ('not_found', 'failed') AND (retry_after IS NULL OR retry_after <= ?)))";
 const PRIORITY_RANK = "(CASE priority WHEN 'interactive' THEN 0 ELSE 1 END)";
+const COLUMNS = 'artist_key, title_key, artist, title, purpose, status, priority, attempts, lyrics_url, retry_after, '
+  + 'alt_artist, alt_title, added_at';
 
 interface RawRow {
   artist_key: string; title_key: string; artist: string; title: string; purpose: Purpose;
-  status: QueueStatus; priority: Priority; attempts: number; retry_after: string | null;
+  status: QueueStatus; priority: Priority; attempts: number; lyrics_url: string | null; retry_after: string | null;
   alt_artist: string | null; alt_title: string | null; added_at: string;
 }
 
 function toRow(raw: RawRow): QueueRow {
   return {
     artistKey: raw.artist_key, titleKey: raw.title_key, artist: raw.artist, title: raw.title,
-    purpose: raw.purpose, status: raw.status, priority: raw.priority, attempts: raw.attempts,
+    purpose: raw.purpose, status: raw.status, priority: raw.priority, attempts: raw.attempts, lyricsUrl: raw.lyrics_url,
     retryAfter: raw.retry_after, altArtist: raw.alt_artist, altTitle: raw.alt_title, addedAt: raw.added_at,
   };
 }
@@ -49,8 +52,7 @@ function toRow(raw: RawRow): QueueRow {
 /** The queue row stored under any of the names, first name first. */
 export function find(store: Store, names: Name[]): QueueRow | undefined {
   const select = store.db.prepare(
-    'SELECT artist_key, title_key, artist, title, purpose, status, priority, attempts, retry_after, '
-    + 'alt_artist, alt_title, added_at FROM queue WHERE artist_key = ? AND title_key = ?',
+    `SELECT ${COLUMNS} FROM queue WHERE artist_key = ? AND title_key = ?`,
   );
   for (const name of names) {
     const [artistKey, titleKey] = cacheKey(name.artist, name.title);
@@ -59,8 +61,7 @@ export function find(store: Store, names: Name[]): QueueRow | undefined {
   }
   // A row whose alternate name is one of these names (the names arrived swapped).
   const byAlt = store.db.prepare(
-    'SELECT artist_key, title_key, artist, title, purpose, status, priority, attempts, retry_after, '
-    + 'alt_artist, alt_title, added_at FROM queue WHERE alt_artist IS NOT NULL',
+    `SELECT ${COLUMNS} FROM queue WHERE alt_artist IS NOT NULL`,
   ).all() as unknown as RawRow[];
   const wanted = new Set(names.map((name) => cacheKey(name.artist, name.title).join('\u0000')));
   const match = byAlt.find((raw) => wanted.has(cacheKey(raw.alt_artist, raw.alt_title).join('\u0000')));
@@ -122,4 +123,95 @@ export function counts(store: Store): Array<{ purpose: string; status: string; p
     + 'ORDER BY purpose, status, priority',
   ).all() as unknown as Array<{ purpose: string; status: string; priority: string; count: number }>;
   return rows.map((row) => ({ purpose: row.purpose, status: row.status, priority: row.priority, count: row.count }));
+}
+
+// --- worker operations: each is one statement, committed at once -----------------
+
+/** The next fetch the worker should take. */
+export function nextDue(store: Store, now: string): QueueRow | undefined {
+  const raw = store.db.prepare(
+    `SELECT ${COLUMNS} FROM queue WHERE purpose = 'fetch' AND ${DUE_CONDITION} `
+    + `ORDER BY ${PRIORITY_RANK}, status != 'pending', attempts, added_at LIMIT 1`,
+  ).get(now) as RawRow | undefined;
+  return raw && toRow(raw);
+}
+
+/** The oldest pending calibration sample. */
+export function nextCalibration(store: Store): QueueRow | undefined {
+  const raw = store.db.prepare(
+    `SELECT ${COLUMNS} FROM queue WHERE purpose = 'calibrate' AND status = 'pending' ORDER BY added_at LIMIT 1`,
+  ).get() as RawRow | undefined;
+  return raw && toRow(raw);
+}
+
+function updateRow(store: Store, row: QueueRow, assignments: string, values: Array<string | number | null>, now: string): void {
+  store.db.prepare(`UPDATE queue SET ${assignments}, updated_at = ? WHERE artist_key = ? AND title_key = ?`)
+    .run(...values, now, row.artistKey, row.titleKey);
+}
+
+export function setLyricsUrl(store: Store, row: QueueRow, url: string, now: string): void {
+  updateRow(store, row, 'lyrics_url = ?', [url], now);
+}
+
+export function markDone(store: Store, row: QueueRow, result: string, now: string): void {
+  updateRow(store, row, "status = 'done', result = ?, attempts = attempts + 1, retry_after = NULL", [result], now);
+}
+
+export function markNotFound(store: Store, row: QueueRow, result: string, retryAfter: string, now: string): void {
+  updateRow(store, row, "status = 'not_found', result = ?, attempts = attempts + 1, retry_after = ?", [result, retryAfter], now);
+}
+
+/** One failed attempt. With a retry time the row becomes 'failed' until then. */
+export function markError(store: Store, row: QueueRow, detail: string, failedRetryAfter: string | null, now: string): void {
+  if (failedRetryAfter === null) {
+    updateRow(store, row, 'result = ?, attempts = attempts + 1', [detail], now);
+  } else {
+    updateRow(store, row, "status = 'failed', result = ?, attempts = attempts + 1, retry_after = ?", [detail, failedRetryAfter], now);
+  }
+}
+
+/** Sets songs not found back to pending now, without waiting for their retry time. */
+export function requeueNotFound(store: Store, now: string): number {
+  const { changes } = store.db.prepare(
+    "UPDATE queue SET status = 'pending', attempts = 0, lyrics_url = NULL, retry_after = NULL, updated_at = ? "
+    + "WHERE status = 'not_found' AND purpose = 'fetch'",
+  ).run(now);
+  return Number(changes);
+}
+
+export interface RequestEntry {
+  at: number;
+  kind: 'search' | 'lyrics' | 'home';
+  outcome: 'ok' | 'challenge' | 'error';
+  httpStatus: number | null;
+  detail: string | null;
+  url: string | null;
+  artist: string | null;
+  title: string | null;
+}
+
+export function logRequest(store: Store, entry: RequestEntry): void {
+  const previous = (store.db.prepare('SELECT MAX(at) AS at FROM requests').get() as { at: number | null }).at;
+  store.db.prepare(
+    'INSERT INTO requests (at, kind, outcome, http_status, gap, detail, url, artist, title) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).run(entry.at, entry.kind, entry.outcome, entry.httpStatus, previous === null ? null : entry.at - previous,
+    entry.detail, entry.url, entry.artist, entry.title);
+}
+
+export function recentRequests(store: Store, limit: number): Array<RequestEntry & { gap: number | null }> {
+  const rows = store.db.prepare(
+    'SELECT at, kind, outcome, http_status, gap, detail, url, artist, title FROM requests ORDER BY at DESC, id DESC LIMIT ?',
+  ).all(limit) as unknown as Array<{
+    at: number; kind: RequestEntry['kind']; outcome: RequestEntry['outcome']; http_status: number | null;
+    gap: number | null; detail: string | null; url: string | null; artist: string | null; title: string | null;
+  }>;
+  return rows.map((row) => ({
+    at: row.at, kind: row.kind, outcome: row.outcome, httpStatus: row.http_status, gap: row.gap,
+    detail: row.detail, url: row.url, artist: row.artist, title: row.title,
+  }));
+}
+
+/** Deletes requests older than `before` (Unix seconds). Returns how many. */
+export function pruneRequests(store: Store, before: number): number {
+  return Number(store.db.prepare('DELETE FROM requests WHERE at < ?').run(before).changes);
 }

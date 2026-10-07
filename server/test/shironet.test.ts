@@ -38,6 +38,10 @@ describe('URLs', () => {
     assert.equal(isLyricsUrl('not a url'), false);
     assert.equal(workId(`${BASE_URL}/artist?prfid=578`), null);
   });
+  test('a look-alike host is not Shironet', () => {
+    assert.equal(isLyricsUrl('https://evilshironet.mako.co.il/artist?type=lyrics&wrkid=1'), false);
+    assert.equal(isLyricsUrl('https://www.shironet.mako.co.il/artist?type=lyrics&wrkid=1'), true);
+  });
   test('challenge URL', () => {
     assert.equal(isChallengeUrl('https://validate.perfdrive.com/?ssa=1'), true);
     assert.equal(isChallengeUrl('https://perfdrive.com/'), true);
@@ -62,6 +66,17 @@ describe('interpretSearch', () => {
   });
   test('an empty page has no results', () => {
     assert.deepEqual(interpretSearch(page({})), []);
+  });
+  test('a malformed link is skipped; the other results count', () => {
+    const results = interpretSearch(page({
+      links: [
+        { text: 'bad', href: 'http://[::1' },
+        { text: 'artist', href: '/artist?lang=1&prfid=1' },
+        { text: ' שיר לשלום', href: '/artist?type=lyrics&lang=1&prfid=820&wrkid=3005' },
+        { text: ' עופרה חזה', href: '/artist?lang=1&prfid=820' },
+      ],
+    }));
+    assert.deepEqual(results.map((r) => r.artist), ['עופרה חזה']);
   });
   test('a link without href is skipped', () => {
     assert.deepEqual(interpretSearch(page({ links: [{ text: 'x', href: null }, { text: 'y', href: null }] })), []);

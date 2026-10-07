@@ -58,7 +58,7 @@ function parseUrl(url: string): URL | null {
 
 export function isLyricsUrl(url: string): boolean {
   const parsed = parseUrl(url.trim());
-  if (!parsed || !parsed.hostname.endsWith(HOST)) return false;
+  if (!parsed || (parsed.hostname !== HOST && !parsed.hostname.endsWith(`.${HOST}`))) return false;
   const types = parsed.searchParams.getAll('type');
   return types.length === 1 && types[0] === 'lyrics' && !!parsed.searchParams.get('wrkid');
 }
@@ -80,7 +80,12 @@ export function interpretSearch(page: ExtractedPage): SearchResult[] {
     const song = page.links[index];
     const artist = page.links[index + 1];
     if (!song.href) continue;
-    const url = new URL(song.href, BASE_URL).toString();
+    let url: string;
+    try {
+      url = new URL(song.href, BASE_URL).toString();
+    } catch {
+      continue; // one malformed link must not lose the other results
+    }
     if (!isLyricsUrl(url)) continue;
     results.push({ title: singleLine(song.text), artist: singleLine(artist.text), url });
   }

@@ -142,6 +142,22 @@ describe('LyricsService', () => {
     assert.equal(service.put({ artist: 'Band', title: 'Song' }, 'An English song', '/a.mp3', false), 'not_hebrew');
     assert.equal(store.count(), 0);
   });
+  test('a song the worker is fetching answers fetching', () => {
+    const busy = new LyricsService(store, () => NOW, { inFlight: () => ({ artistKey: 'דן תורן', titleKey: 'אוטו כחול' }) });
+    busy.fetch(HEBREW, 'bulk');
+    assert.deepEqual(busy.fetch(HEBREW, 'interactive'), { status: 'fetching' });
+  });
+  test('queuing a song wakes the worker', () => {
+    let woken = 0;
+    const waking = new LyricsService(store, () => NOW, { onQueued: () => { woken += 1; } });
+    waking.fetch(HEBREW, 'bulk');
+    waking.fetch({ artist: 'R.E.M.', title: 'The One I Love' }, 'bulk'); // not Hebrew: no wake
+    assert.equal(woken, 1);
+  });
+  test('status includes the worker status', () => {
+    const withWorker = new LyricsService(store, () => NOW, { extraStatus: () => ({ running: true }) });
+    assert.deepEqual(withWorker.status().worker, { running: true });
+  });
   test('status counts lyrics and the queue', () => {
     store.put('A', 'B', 'שורה', SOURCE_EMBEDDED);
     service.fetch(HEBREW, 'bulk');

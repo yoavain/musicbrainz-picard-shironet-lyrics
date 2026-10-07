@@ -92,6 +92,7 @@ export class Store {
 
   constructor(path: string) {
     this.db = new DatabaseSync(path);
+    this.db.exec('PRAGMA busy_timeout = 5000');
     try {
       if (path !== ':memory:') this.db.exec('PRAGMA journal_mode=WAL');
       this.db.exec(SCHEMA);
@@ -124,6 +125,9 @@ export class Store {
     this.inTransaction = true;
     try {
       const result = fn();
+      if (typeof (result as { then?: unknown } | null)?.then === 'function') {
+        throw new Error('Store.transaction needs a synchronous callback; never await inside it');
+      }
       this.db.exec('COMMIT');
       return result;
     } catch (error) {
@@ -141,6 +145,20 @@ export class Store {
 
   setMeta(key: string, value: string): void {
     this.db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run(key, value);
+  }
+
+  getJson<T>(key: string): T | undefined {
+    const raw = this.getMeta(key);
+    if (raw === undefined) return undefined;
+    try {
+      return JSON.parse(raw) as T;
+    } catch {
+      return undefined;
+    }
+  }
+
+  setJson(key: string, value: unknown): void {
+    this.setMeta(key, JSON.stringify(value));
   }
 
   get(artist: string | null | undefined, title: string | null | undefined): Entry | undefined {

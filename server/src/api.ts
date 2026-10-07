@@ -111,6 +111,8 @@ export function buildApp(options: AppOptions): FastifyInstance {
         return { status: 'found', ...entryFields(answer.entry) };
       case 'queued':
         return reply.code(202).send({ status: 'queued', position: answer.position });
+      case 'fetching':
+        return reply.code(202).send({ status: 'fetching' });
       case 'not_found':
       case 'failed':
         return reply.code(404).send({ status: answer.status, retryAfter: answer.retryAfter });

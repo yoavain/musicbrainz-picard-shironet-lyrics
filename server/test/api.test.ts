@@ -154,6 +154,18 @@ describe('API', () => {
     const reply = await sendJson('PUT', '/lyrics', SONG);
     assert.equal(reply.statusCode, 400);
   });
+  test('fetch answers 202 fetching while the worker has the song', async () => {
+    await app.close();
+    const service = new LyricsService(store, () => new Date(Date.UTC(2026, 9, 6, 12)), {
+      inFlight: () => ({ artistKey: 'דן תורן', titleKey: 'אוטו כחול' }),
+    });
+    app = buildApp({ service, allowedHosts: [HOST], version: '9.9.9' });
+    await app.ready();
+    await sendJson('POST', '/lyrics/fetch', SONG);
+    const reply = await sendJson('POST', '/lyrics/fetch', SONG);
+    assert.equal(reply.statusCode, 202);
+    assert.deepEqual(reply.json(), { status: 'fetching' });
+  });
   test('status', async () => {
     await sendJson('POST', '/lyrics/fetch', SONG);
     const reply = await app.inject({ method: 'GET', url: '/status', headers: { host: HOST } });

@@ -18,7 +18,8 @@ export type FetchAnswer =
   | { status: 'queued'; position: number }
   | { status: 'not_found' | 'failed'; retryAfter: string | null }
   | { status: 'not_hebrew' }
-  | { status: 'no_name' };
+  | { status: 'no_name' }
+  | { status: 'fetching' };
 
 export type PutAnswer = 'added' | 'same' | 'replaced' | 'conflict' | 'skipped' | 'not_hebrew';
 
@@ -26,6 +27,15 @@ export interface ServiceStatus {
   lyrics: number;
   due: number;
   queue: Array<{ purpose: string; status: string; priority: string; count: number }>;
+  worker?: Record<string, unknown>;
+}
+
+export interface ServiceHooks {
+  /** The song the worker is fetching right now (in memory only). */
+  inFlight?: () => { artistKey: string; titleKey: string } | null;
+  /** Called after a song is queued or due again, to wake the worker. */
+  onQueued?: () => void;
+  extraStatus?: () => Record<string, unknown>;
 }
 
 /**
@@ -55,10 +65,12 @@ function allNames(song: Song): string[] {
 export class LyricsService {
   private readonly store: Store;
   private readonly now: () => Date;
+  private readonly hooks: ServiceHooks;
 
-  constructor(store: Store, now: () => Date = () => new Date()) {
+  constructor(store: Store, now: () => Date = () => new Date(), hooks: ServiceHooks = {}) {
     this.store = store;
     this.now = now;
+    this.hooks = hooks;
   }
 
   lookup(song: Song): Entry | undefined {
@@ -73,7 +85,7 @@ export class LyricsService {
     if (names.length === 0) return { status: 'no_name' };
     if (!isHebrewSong(allNames(song), { language: song.language })) return { status: 'not_hebrew' };
     const now = isoTime(this.now());
-    return this.store.transaction((): FetchAnswer => {
+    const answer = this.store.transaction((): FetchAnswer => {
       let row = queue.find(this.store, names);
       if (!row) {
         queue.insert(this.store, names, priority, now);
@@ -94,8 +106,12 @@ export class LyricsService {
       if (priority === 'interactive' && row.priority !== 'interactive') {
         queue.setPriority(this.store, row, 'interactive', now);
       }
+      const busy = this.hooks.inFlight?.();
+      if (busy && busy.artistKey === row.artistKey && busy.titleKey === row.titleKey) return { status: 'fetching' };
       return { status: 'queued', position: queue.position(this.store, row, now) };
     });
+    if (answer.status === 'queued') this.hooks.onQueued?.();
+    return answer;
   }
 
   /** Stores the first name whose key differs from the row's own key as its alternate. */
@@ -120,10 +136,12 @@ export class LyricsService {
   }
 
   status(): ServiceStatus {
+    const extra = this.hooks.extraStatus?.();
     return {
       lyrics: this.store.count(),
       due: queue.dueCount(this.store, isoTime(this.now())),
       queue: queue.counts(this.store),
+      ...(extra ? { worker: extra } : {}),
     };
   }
 }

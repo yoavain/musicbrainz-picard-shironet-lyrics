@@ -110,6 +110,26 @@ describe('Store in memory', () => {
     assert.equal(store.getMeta('x'), '1');
     assert.equal(store.getMeta('schema_version'), String(SCHEMA_VERSION));
   });
+  test('transaction refuses an async callback and rolls back', () => {
+    assert.throws(() => store.transaction(() => {
+      store.put('A', 'T', 'x', SOURCE_EMBEDDED);
+      return Promise.resolve();
+    }), /synchronous/);
+    assert.equal(store.count(), 0);
+  });
+  test('busy timeout is set', () => {
+    const row = store.db.prepare('PRAGMA busy_timeout').get() as Record<string, number>;
+    assert.equal(Object.values(row)[0], 5000);
+  });
+  test('JSON meta round-trip', () => {
+    assert.equal(store.getJson('pace'), undefined);
+    store.setJson('pace', { interval: 10, list: [1, 2] });
+    assert.deepEqual(store.getJson('pace'), { interval: 10, list: [1, 2] });
+  });
+  test('broken JSON meta reads as undefined', () => {
+    store.setMeta('pace', '{not json');
+    assert.equal(store.getJson('pace'), undefined);
+  });
   test('isEmpty', () => {
     assert.equal(store.isEmpty(), true);
     store.put('A', 'T', 'x', SOURCE_EMBEDDED);
