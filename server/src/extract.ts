@@ -23,12 +23,15 @@ export const EXTRACT_SOURCE = `(() => {
   const links = [...document.querySelectorAll('a.search_link_name_big')];
   const html = document.documentElement ? document.documentElement.outerHTML : '';
   const hasContent = !!lyricsElement || links.length > 0;
+  // Every real Shironet page (the home page too) loads the bot-manager script, so the
+  // script alone is no sign of a challenge; a page with Shironet's own title is not one.
+  const shironetTitle = document.title.includes('שירונט');
   return {
     url: location.href,
     title: document.title,
     challenge: location.hostname.endsWith('perfdrive.com')
       || /radware/i.test(document.title)
-      || (html.includes('perfdrive.com') && !hasContent),
+      || (html.includes('perfdrive.com') && !hasContent && !shironetTitle),
     links: links.map((a) => ({ text: textOf(a), href: a.getAttribute('href') })),
     lyrics: lyricsElement ? {
       song: textOf(document.querySelector('h1.artist_song_name_txt')),

@@ -255,8 +255,8 @@ async function checkBrowserCommand(): Promise<number> {
       const pid = session.pid;
       const report = await session.close('check-browser done');
       for (let i = 0; i < 50 && isAlive(pid); i += 1) await new Promise((resolve) => setTimeout(resolve, 100));
-      const leak = isAlive(pid) || !report.profileRemoved;
-      console.log(`leak check: ${leak ? 'FAILED' : 'ok'} (close: ${report.how}, profile removed: ${report.profileRemoved})`);
+      const leak = isAlive(pid);
+      console.log(`leak check: ${leak ? 'FAILED: the browser process is still running' : 'ok'} (close: ${report.how})`);
       if (leak) failures += 1;
     }
     return failures === 0 ? 0 : 1;

@@ -19,6 +19,8 @@ export interface BrowserSession {
   readonly startedAt: number;
   navigateAndExtract(url: string, signal: AbortSignal): Promise<ExtractedPage>;
   extract(): Promise<ExtractedPage>;
+  /** Evaluates an expression in the session's page (returned by value). */
+  evaluate(expression: string): Promise<unknown>;
   memoryBytes(): Promise<number | null>;
   close(reason: string): Promise<CloseReport>;
 }
@@ -32,29 +34,40 @@ export interface SessionOptions {
 
 const delay = (ms: number, signal: AbortSignal) => realClock.sleep(ms, signal);
 
-/** A real Chrome session: launch, attach to its page over one flat CDP session. */
+/**
+ * A real Chrome session: launch Chrome on its fixed folder, then browse in a fresh
+ * incognito context (Target.createBrowserContext). Cookies, storage and cache of the visit
+ * live in memory and are gone when the context closes; nothing reaches the folder, so the
+ * server never has Chrome files to delete (measured 2026-10-07: modes compared locally).
+ */
 export async function openChromeSession(options: SessionOptions, log: Logger): Promise<BrowserSession> {
   await recoverLeftovers(options.dataDir, log);
   const chrome = await ChromeProcess.launch({ chromePath: options.chromePath, dataDir: options.dataDir }, log);
   let cdp: CdpConnection | null = null;
   try {
     cdp = await CdpConnection.connect(chrome.browserWsUrl);
-    const { targetInfos } = await cdp.send<{ targetInfos: Array<{ targetId: string; type: string }> }>('Target.getTargets', {}, undefined, 10_000);
-    const page = targetInfos.find((target) => target.type === 'page');
-    if (!page) throw new Error('Chrome has no page target');
-    const { sessionId } = await cdp.send<{ sessionId: string }>('Target.attachToTarget', { targetId: page.targetId, flatten: true }, undefined, 10_000);
-    await cdp.send('Page.enable', {}, sessionId, 10_000);
     const connection = cdp;
+    const { targetInfos } = await cdp.send<{ targetInfos: Array<{ targetId: string; type: string }> }>('Target.getTargets', {}, undefined, 10_000);
+    const startPages = targetInfos.filter((target) => target.type === 'page');
+    const { browserContextId } = await cdp.send<{ browserContextId: string }>('Target.createBrowserContext', { disposeOnDetach: true }, undefined, 10_000);
+    const { targetId } = await cdp.send<{ targetId: string }>('Target.createTarget', { url: 'about:blank', browserContextId }, undefined, 10_000);
+    // The start window of the regular profile is not used; close it so only the incognito window shows.
+    for (const page of startPages) {
+      await cdp.send('Target.closeTarget', { targetId: page.targetId }, undefined, 10_000).catch(() => {});
+    }
+    const { sessionId } = await cdp.send<{ sessionId: string }>('Target.attachToTarget', { targetId, flatten: true }, undefined, 10_000);
+    await cdp.send('Page.enable', {}, sessionId, 10_000);
     const settleMs = options.settleMs ?? 3_000;
     const navTimeoutMs = options.navTimeoutMs ?? 45_000;
 
-    const extract = async (): Promise<ExtractedPage> => {
-      const answer = await connection.send<{ result: { value: ExtractedPage }; exceptionDetails?: { text: string } }>(
-        'Runtime.evaluate', { expression: EXTRACT_SOURCE, returnByValue: true }, sessionId, 15_000,
+    const evaluate = async (expression: string): Promise<unknown> => {
+      const answer = await connection.send<{ result: { value: unknown }; exceptionDetails?: { text: string } }>(
+        'Runtime.evaluate', { expression, returnByValue: true }, sessionId, 15_000,
       );
       if (answer.exceptionDetails) throw new Error(`page script failed: ${answer.exceptionDetails.text}`);
       return answer.result.value;
     };
+    const extract = async (): Promise<ExtractedPage> => (await evaluate(EXTRACT_SOURCE)) as ExtractedPage;
 
     return {
       pid: chrome.pid,
@@ -70,9 +83,11 @@ export async function openChromeSession(options: SessionOptions, log: Logger): P
         return extract();
       },
       extract,
+      evaluate,
       memoryBytes: () => treeMemory(chrome.pid),
-      close: (reason: string) => {
+      close: async (reason: string) => {
         log.info({ pid: chrome.pid, reason }, 'closing browser');
+        await connection.send('Target.disposeBrowserContext', { browserContextId }, undefined, 5_000).catch(() => {});
         return chrome.close(connection);
       },
     };
@@ -111,7 +126,7 @@ export class ChromeReader implements PageReader {
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private memoryTimer: ReturnType<typeof setInterval> | null = null;
   private lastMemory: number | null = null;
-  private lastClose: { reason: string; how: string; profileRemoved: boolean } | null = null;
+  private lastClose: { reason: string; how: string } | null = null;
   private closing: Promise<void> | null = null;
 
   constructor(open: () => Promise<BrowserSession>, limits: ReaderLimits, log: Logger, clock: Clock = realClock) {
@@ -223,10 +238,10 @@ export class ChromeReader implements PageReader {
     this.closing = (async () => {
       try {
         const report = await session.close(reason);
-        this.lastClose = { reason, how: report.how, profileRemoved: report.profileRemoved };
+        this.lastClose = { reason, how: report.how };
       } catch (error) {
         this.log.error({ err: error }, 'browser close failed');
-        this.lastClose = { reason, how: 'failed', profileRemoved: false };
+        this.lastClose = { reason, how: 'failed' };
       }
     })();
     await this.closing;

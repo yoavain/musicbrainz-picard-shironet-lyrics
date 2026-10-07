@@ -1,10 +1,14 @@
-// Launches Chrome for one browser session and enforces the leak rules (spec: "Browser
+// Launches Chrome and enforces the process side of the leak rules (spec: "Browser
 // resources: no leaks"): a record file before launch, an ordered close (CDP close, wait,
-// kill the whole tree, delete the profile with retries), and recovery after a crash.
+// kill the whole tree), and recovery after a crash.
+//
+// Chrome runs on one fixed user data folder, <data dir>/browser, which Chrome itself
+// manages. The server never deletes Chrome's files. Visits never reach that folder: each
+// session browses in a fresh incognito context (reader.ts), which lives in memory only.
 
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
@@ -12,7 +16,7 @@ import type { CdpConnection } from './cdp.ts';
 import type { Logger } from './notifier.ts';
 import { isAlive, killTree, listProcesses } from './processes.ts';
 
-export const PROFILE_PREFIX = 'browser-profile-';
+export const BROWSER_DIR = 'browser';
 export const RECORD_FILE = 'browser.json';
 
 export interface LaunchOptions {
@@ -25,13 +29,11 @@ export interface LaunchOptions {
 
 export interface CloseReport {
   how: 'clean' | 'killed' | 'already_exited';
-  profileRemoved: boolean;
 }
 
 interface BrowserRecord {
   pid: number;
   start: string | null;
-  profile: string;
 }
 
 // A normal launch: no --headless, no --enable-automation, nothing patched. Each flag here
@@ -61,34 +63,18 @@ function freePort(): Promise<number> {
   });
 }
 
-/** Deletes a folder, retrying while Windows still holds files in it. False when it stays. */
-export async function removeWithRetries(path: string, attempts = 10, delayMs = 500): Promise<boolean> {
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      rmSync(path, { recursive: true, force: true });
-      if (!existsSync(path)) return true;
-    } catch {
-      // locked; try again
-    }
-    await sleep(delayMs);
-  }
-  return !existsSync(path);
-}
-
 export class ChromeProcess {
   readonly pid: number;
-  readonly profile: string;
+  readonly userDataDir: string;
   readonly browserWsUrl: string;
   readonly startedAt: number;
-  private readonly child: ChildProcess;
   private readonly dataDir: string;
   private readonly log: Logger;
   private exited = false;
 
-  private constructor(child: ChildProcess, profile: string, browserWsUrl: string, dataDir: string, log: Logger) {
-    this.child = child;
+  private constructor(child: ChildProcess, userDataDir: string, browserWsUrl: string, dataDir: string, log: Logger) {
     this.pid = child.pid!;
-    this.profile = profile;
+    this.userDataDir = userDataDir;
     this.browserWsUrl = browserWsUrl;
     this.dataDir = dataDir;
     this.log = log;
@@ -98,22 +84,20 @@ export class ChromeProcess {
   }
 
   static async launch(options: LaunchOptions, log: Logger): Promise<ChromeProcess> {
-    const profile = mkdtempSync(join(options.dataDir, PROFILE_PREFIX));
+    const userDataDir = join(options.dataDir, BROWSER_DIR);
+    mkdirSync(userDataDir, { recursive: true });
     const port = await freePort();
     const args = [
-      ...(options.prefixArgs ?? []), `--user-data-dir=${profile}`, `--remote-debugging-port=${port}`, ...CHROME_FLAGS, 'about:blank',
+      ...(options.prefixArgs ?? []), `--user-data-dir=${userDataDir}`, `--remote-debugging-port=${port}`, ...CHROME_FLAGS, 'about:blank',
     ];
     // Linux: its own process group, so the whole tree can be killed at once.
     const child = spawn(options.chromePath, args, { stdio: 'ignore', detached: process.platform !== 'win32' });
     await new Promise<void>((resolve, reject) => {
       child.once('spawn', () => resolve());
       child.once('error', (error) => reject(new Error(`Cannot start ${options.chromePath}: ${error.message}`)));
-    }).catch((error: Error) => {
-      rmSync(profile, { recursive: true, force: true });
-      throw error;
     });
     const start = (await listProcesses()).find((info) => info.pid === child.pid)?.start ?? null;
-    const record: BrowserRecord = { pid: child.pid!, start, profile };
+    const record: BrowserRecord = { pid: child.pid!, start };
     writeFileSync(join(options.dataDir, RECORD_FILE), JSON.stringify(record));
 
     // With a fixed port Chrome does not reliably write DevToolsActivePort: ask its HTTP endpoint.
@@ -132,12 +116,14 @@ export class ChromeProcess {
       }
       await sleep(200);
     }
-    const chrome = new ChromeProcess(child, profile, wsUrl ?? '', options.dataDir, log);
+    const chrome = new ChromeProcess(child, userDataDir, wsUrl ?? '', options.dataDir, log);
     if (!wsUrl) {
       await chrome.close(null);
+      // A Chrome that is already running on this folder takes the launch over and the new
+      // process exits at once; recoverLeftovers() before each launch prevents that.
       throw new Error(`Chrome did not open its debugging port within the start timeout (${options.chromePath})`);
     }
-    log.info({ pid: chrome.pid, profile }, 'browser started');
+    log.info({ pid: chrome.pid, userDataDir }, 'browser started');
     return chrome;
   }
 
@@ -151,7 +137,7 @@ export class ChromeProcess {
     return this.exited;
   }
 
-  /** The close sequence: CDP close, wait up to 5 s, kill the tree, delete the profile and the record. */
+  /** The close sequence: CDP close, wait up to 5 s, kill the whole tree, remove the record. */
   async close(cdp: CdpConnection | null): Promise<CloseReport> {
     let how: CloseReport['how'] = this.exited ? 'already_exited' : 'clean';
     if (!this.exited && cdp && !cdp.isClosed) {
@@ -167,48 +153,34 @@ export class ChromeProcess {
       await killTree(this.pid);
       await this.waitForExit(5_000);
     }
-    // After a clean exit, renderers may outlive the main process for a moment; the profile
-    // removal below retries until they are gone and release their files.
-    const profileRemoved = await removeWithRetries(this.profile);
-    if (!profileRemoved) this.log.warn({ profile: this.profile }, 'browser profile left behind; the next start removes it');
     rmSync(join(this.dataDir, RECORD_FILE), { force: true });
-    this.log.info({ pid: this.pid, how, profileRemoved }, 'browser closed');
-    return { how, profileRemoved };
+    this.log.info({ pid: this.pid, how }, 'browser closed');
+    return { how };
   }
 }
 
 /**
  * After a crash of the server: kill the Chrome named in the record, when its PID still runs
- * with the same start time (a reused PID is never touched), then delete every profile
- * folder and the record. Runs at start and before every launch.
+ * with the same start time (a reused PID is never touched). Runs at start and before every
+ * launch, so a leftover Chrome cannot take over the next launch on the same folder.
  */
-export async function recoverLeftovers(dataDir: string, log: Logger): Promise<{ killedPid: number | null; removed: string[]; left: string[] }> {
-  let killedPid: number | null = null;
+export async function recoverLeftovers(dataDir: string, log: Logger): Promise<{ killedPid: number | null }> {
   const recordPath = join(dataDir, RECORD_FILE);
-  if (existsSync(recordPath)) {
-    try {
-      const record = JSON.parse(readFileSync(recordPath, 'utf8')) as BrowserRecord;
-      if (record.start && isAlive(record.pid)) {
-        const running = (await listProcesses()).find((info) => info.pid === record.pid);
-        if (running && running.start === record.start) {
-          await killTree(record.pid);
-          killedPid = record.pid;
-          log.warn({ pid: record.pid }, 'killed a browser left over from a crash');
-        }
+  if (!existsSync(recordPath)) return { killedPid: null };
+  let killedPid: number | null = null;
+  try {
+    const record = JSON.parse(readFileSync(recordPath, 'utf8')) as BrowserRecord;
+    if (record.start && isAlive(record.pid)) {
+      const running = (await listProcesses()).find((info) => info.pid === record.pid);
+      if (running && running.start === record.start) {
+        await killTree(record.pid);
+        killedPid = record.pid;
+        log.warn({ pid: record.pid }, 'killed a browser left over from a crash');
       }
-    } catch (error) {
-      log.warn({ err: error }, 'unreadable browser record');
     }
+  } catch (error) {
+    log.warn({ err: error }, 'unreadable browser record');
   }
-  const removed: string[] = [];
-  const left: string[] = [];
-  const names = existsSync(dataDir) ? readdirSync(dataDir) : [];
-  for (const name of names.filter((n) => n.startsWith(PROFILE_PREFIX))) {
-    const path = join(dataDir, name);
-    if (await removeWithRetries(path, killedPid ? 10 : 3, 300)) removed.push(path);
-    else left.push(path);
-  }
-  if (left.length > 0) log.warn({ left }, 'browser profiles still locked; they are removed on the next start');
   rmSync(recordPath, { force: true });
-  return { killedPid, removed, left };
+  return { killedPid };
 }

@@ -26,7 +26,8 @@ class FakeSession implements BrowserSession {
   }
   async extract() { return this.current; }
   async memoryBytes() { return this.memory; }
-  async close(reason: string) { this.closedWith = reason; return { how: 'clean' as const, profileRemoved: true }; }
+  async evaluate(): Promise<unknown> { return undefined; }
+  async close(reason: string) { this.closedWith = reason; return { how: 'clean' as const }; }
 }
 
 const LIMITS: ReaderLimits = { idleMs: 60_000, maxAgeMs: 3_600_000, maxPages: 3, maxMemoryBytes: 1000, humanPollMs: 10, memoryCheckMs: 60_000 };
@@ -122,6 +123,6 @@ describe('ChromeReader', () => {
     await r.close('done');
     const closed = r.status();
     assert.equal(closed.open, false);
-    assert.deepEqual(closed.lastClose, { reason: 'done', how: 'clean', profileRemoved: true });
+    assert.deepEqual(closed.lastClose, { reason: 'done', how: 'clean' });
   });
 });
