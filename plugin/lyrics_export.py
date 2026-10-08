@@ -12,7 +12,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 import enum
 import os
-import re
 
 import mutagen
 from mutagen._vorbis import VCommentDict  # base class of FLAC, Ogg and Opus comments
@@ -21,19 +20,10 @@ from mutagen.asf import ASFTags
 from mutagen.id3 import ID3
 from mutagen.mp4 import MP4Tags
 
-from .lyrics_text import clean_lyrics, strip_language_prefix
-
-
-LRC = 'lrc'
-TXT = 'txt'
+from .lyrics_text import LRC, TXT, clean_lyrics, is_lrc, sidecar_path, strip_language_prefix
 
 # SYLT time stamp format 2 means milliseconds. Format 1 (MPEG frames) is not converted.
 SYLT_MILLISECONDS = 2
-
-# A line that starts with one or more LRC time tags: [mm:ss], [mm:ss.xx] or [mm:ss:xx].
-_LRC_TIMED_LINE = re.compile(r'^\s*(?:\[\d{1,3}:\d{1,2}(?:[.:]\d{1,3})?\])+')
-# LRC header tags such as [ar:Artist] or [offset:+200].
-_LRC_HEADER_LINE = re.compile(r'^\s*\[(?:ar|ti|al|au|by|length|offset|re|ve|tool|#)\s*:.*\]\s*$', re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -49,13 +39,6 @@ class Outcome(enum.Enum):
     EXISTS = 'exists'  # a .lrc or .txt sidecar exists: skipped without reading the tags
     NO_LYRICS = 'no lyrics'
     UNSUPPORTED = 'unsupported'  # mutagen does not know the format
-
-
-def is_lrc(text: str) -> bool:
-    """True when most lyric lines start with LRC time tags (at least two such lines)."""
-    lines = [line for line in text.split('\n') if line.strip() and not _LRC_HEADER_LINE.match(line)]
-    timed = sum(1 for line in lines if _LRC_TIMED_LINE.match(line))
-    return timed >= 2 and timed * 2 >= len(lines)
 
 
 def lrc_time(milliseconds: int) -> str:
@@ -135,11 +118,6 @@ def read_file_lyrics(path: str) -> FileLyrics | None | Outcome:
     if not text:
         return None
     return FileLyrics(text, LRC if is_lrc(text) else TXT, names[index])
-
-
-def sidecar_path(audio_path: str, kind: str) -> str:
-    """The audio path with the extension replaced: same folder, same name."""
-    return os.path.splitext(audio_path)[0] + '.' + kind
 
 
 def existing_sidecar(audio_path: str) -> str | None:
