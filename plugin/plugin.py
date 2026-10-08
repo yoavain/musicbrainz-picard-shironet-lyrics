@@ -214,7 +214,7 @@ class LookupBatch:
             f'Queued for Shironet now: {c["queued"]}. Run Lookup Lyrics again later to fill them.' if c['queued']
             else 'Queued for Shironet now: 0',
             f'Not found on Shironet (retried later by the server): {c["not_found"]}',
-            f'Not Hebrew: {c["not_hebrew"]}; with lyrics but not on the server: {c["not_cached"]}; without artist or title: {c["no_name"]}',
+            f'Not Hebrew and not cached: {c["not_hebrew"]}; with lyrics but not on the server: {c["not_cached"]}; without artist or title: {c["no_name"]}',
         ]
         if c['unreachable']:
             lines.append(f'\nThe lyrics server did not answer for {c["unreachable"]} files ({_server_url()}): {self.unreachable_error}')

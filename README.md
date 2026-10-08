@@ -27,14 +27,15 @@ blocked, a visible browser gets through. That is why fetching lives in the serve
   lyrics in Shironet**. It fills missing lyrics, replaces lyrics that differ from the cached
   ones, queues the rest, and shows a summary. Run it again later to pick up queued songs.
   Nothing is written to disk until you save.
-- **Your own lyrics feed the cache.** Every file Picard loads or saves sends its lyrics to
-  the server. Lyrics you edit and save replace the cached ones; otherwise the cache keeps
-  its lyrics when a file has different ones (a conflict, named in the log).
-- **Hebrew songs only.** The server fetches a song only when its artist or its title has a
-  Hebrew letter (either name: the file's own tags or the MusicBrainz name). A Hebrew artist
-  with an English title counts; a language tag alone does not. Other songs are counted as
-  "Not Hebrew". Lyrics your files already have are cached when the names or the lyrics are
-  Hebrew.
+- **Your own lyrics feed the cache, in any language.** Every file Picard loads or saves
+  sends its lyrics to the server. Lyrics you edit and save replace the cached ones;
+  otherwise the cache keeps its lyrics when a file has different ones (a conflict, named in
+  the log). A cached song fills the other versions of it too, English songs included.
+- **Shironet for Hebrew songs only.** The server fetches a song only when its artist or its
+  title has a Hebrew letter (either name: the file's own tags or the MusicBrainz name). A
+  Hebrew artist with an English title counts; a language tag alone does not. Other songs
+  get cached lyrics when the cache has them, and otherwise count as "Not Hebrew and not
+  cached".
 - **Loose cache key, exact Shironet match.** The cache key ignores niqqud, punctuation,
   direction marks, "feat." parts and version suffixes such as "(Live)" or "(בהופעה חיה)".
   Matching against Shironet stays exact on the title; a song reported "not found" usually
@@ -159,6 +160,26 @@ Picard. That works only when your Python has the same version as Picard's bundle
 (3.14 for Picard 3.0). `--picard-exe` or `PICARD_EXE` points at a Picard installed
 elsewhere.
 
+## Import lyrics from a folder
+
+```sh
+python scripts/import_lyrics.py "D:\Music" --dry-run   # count only
+python scripts/import_lyrics.py "D:\Music" --server http://127.0.0.1:8735
+```
+
+This is the reverse of the Plex export. It sends the lyrics that a folder's files already
+have to the server, in any language, so the other versions of those songs get them too.
+
+- Lyrics come from the tags. A file without lyrics in its tags uses its `.txt` or `.lrc`
+  sidecar (UTF-8). A `.lrc` loses its time tags, because the cache keeps plain text.
+- The cache keeps its own lyrics when a file has different ones. The script lists these
+  conflicts after the summary: the first 20, or all of them with `--verbose`.
+- Nothing is queued for Shironet; that is the folder scan's job.
+- Every file is read on every run. The scan state is not used. A second run answers "same"
+  for lyrics it sent before.
+- Ctrl+C stops after the current file. For a server on the network, set
+  `LYRICS_SERVER_TOKEN`. It needs `mutagen`, as the folder scan does.
+
 ## Export lyrics to sidecar files (for Plex)
 
 Plex does not read embedded lyrics. It reads a `.lrc` (timed) or `.txt` (plain) file in UTF-8
@@ -197,7 +218,8 @@ Both plugins write the **Lyrics** tag when Picard matches a file. Shironet Lyric
 only when the file has no lyrics. Which plugin wins on a Hebrew song depends on which one
 runs first and on whether LRCLIB Lyrics replaces existing lyrics; check a matched Hebrew
 album before you save it. LRCLIB Lyrics also creates and renames `.lrc` files, so
-`scripts/export_lyrics.py` skips those tracks.
+`scripts/export_lyrics.py` skips those tracks, and `scripts/import_lyrics.py` reads them
+when the tags have no lyrics.
 
 ## Layout
 
@@ -206,8 +228,8 @@ Picard loads a plugin from the repository root, so the root holds `MANIFEST.toml
 
 | Path | Contents |
 |---|---|
-| `plugin/` | The Picard plugin: hooks and actions (`plugin.py`), the server client, the folder scan and its state, the tag reader, the Plex export |
-| `scripts/` | Command-line tools: folder scan, Plex export, and `_bootstrap.py` (loads the plugin modules and Picard's bundled `mutagen` without Picard) |
+| `plugin/` | The Picard plugin: hooks and actions (`plugin.py`), the server client, the folder scan and its state, the tag reader, the Plex export and the lyrics import |
+| `scripts/` | Command-line tools: folder scan, lyrics import, Plex export, and `_bootstrap.py` (loads the plugin modules and Picard's bundled `mutagen` without Picard) |
 | `tests/` | Python tests |
 | `server/` | The lyrics server: `src/` (TypeScript, run directly by Node), `test/`, `test-browser/` (opt-in tests on real Chrome), `tools/` (deploy script), `DEPENDENCIES.md` (Snyk decisions) |
 

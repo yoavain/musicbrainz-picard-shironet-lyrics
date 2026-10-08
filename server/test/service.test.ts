@@ -151,9 +151,11 @@ describe('LyricsService', () => {
     assert.equal(service.put(HEBREW, 'instrumental', '/a.mp3', false), 'skipped');
     assert.equal(service.put({ artist: '!!!', title: '' }, 'שורה', '/a.mp3', false), 'skipped');
   });
-  test('put of a song that is not Hebrew stores nothing', () => {
-    assert.equal(service.put({ artist: 'Band', title: 'Song' }, 'An English song', '/a.mp3', false), 'not_hebrew');
-    assert.equal(store.count(), 0);
+  test('put stores a song that is not Hebrew, and fetch then answers it', () => {
+    assert.equal(service.put({ artist: 'Band', title: 'Song (Live)' }, 'An English song', '/a.mp3', false), 'added');
+    const answer = service.fetch({ artist: 'Band', title: 'Song - Remastered 2011' }, 'bulk');
+    assert.equal(answer.status === 'found' && answer.entry.lyrics, 'An English song');
+    assert.equal(queue.counts(store).length, 0);
   });
   test('a song the worker is fetching answers fetching', () => {
     const busy = new LyricsService(store, () => NOW, { inFlight: () => ({ artistKey: 'דן תורן', titleKey: 'אוטו כחול' }) });

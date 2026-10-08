@@ -57,8 +57,6 @@ def _count_put(stats: ScanStats, path: str, answer: Answer) -> str:
     elif result == 'conflict':
         stats.conflicts += 1
         stats.conflict_files.append(path)
-    elif result == 'not_hebrew':
-        stats.not_hebrew += 1
     return result
 
 
@@ -149,7 +147,7 @@ def format_summary(stats: ScanStats, folder: str) -> str:
         f'Read: {stats.read}, with lyrics: {stats.with_lyrics}',
         f'Lyrics sent to the server: added {stats.added}, same {stats.same}, updated {stats.replaced}',
         f'Conflicts (the server kept its lyrics): {stats.conflicts}',
-        f'Not Hebrew (not cached, not fetched): {stats.not_hebrew}',
+        f'Without lyrics, not Hebrew and not cached (not fetched): {stats.not_hebrew}',
         f'Songs without lyrics: queued for Shironet {stats.queued}, already on the server {stats.cached}, '
         f'not found on Shironet {stats.not_found}',
         f'Unreadable files: {stats.errors}',

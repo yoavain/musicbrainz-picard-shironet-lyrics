@@ -2,7 +2,7 @@
 
 import type { Entry, Store } from './store.ts';
 import { SOURCE_EMBEDDED, isoTime } from './store.ts';
-import { cacheKey, cleanLyrics, hasHebrewName, isHebrewSong } from './text.ts';
+import { cacheKey, cleanLyrics, hasHebrewName } from './text.ts';
 import * as queue from './queue.ts';
 import type { Name, Priority } from './queue.ts';
 import { enqueueCalibration } from './calibration.ts';
@@ -22,7 +22,7 @@ export type FetchAnswer =
   | { status: 'no_name' }
   | { status: 'fetching' };
 
-export type PutAnswer = 'added' | 'same' | 'replaced' | 'conflict' | 'skipped' | 'not_hebrew';
+export type PutAnswer = 'added' | 'same' | 'replaced' | 'conflict' | 'skipped';
 
 export interface ServiceStatus {
   lyrics: number;
@@ -131,12 +131,14 @@ export class LyricsService {
     return true;
   }
 
-  /** Lyrics a file already has. Stored under every name; the cache's conflict rules apply. */
+  /**
+   * Lyrics a file already has, in any language. Stored under every name; the cache's
+   * conflict rules apply. Only fetching is limited to Hebrew songs.
+   */
   put(song: Song, lyrics: string, ref: string | null, replace: boolean): PutAnswer {
     const names = songNames(song);
     const cleaned = cleanLyrics(lyrics);
     if (!cleaned || names.length === 0) return 'skipped';
-    if (!isHebrewSong(allNames(song), { lyrics: cleaned, language: song.language })) return 'not_hebrew';
     const results = this.store.transaction(
       () => this.store.putNames(names, cleaned, SOURCE_EMBEDDED, ref, replace),
     );

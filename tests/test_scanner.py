@@ -99,12 +99,12 @@ class ScanFolderTest(unittest.TestCase):
         self.add('d2.mp3', FileTags('אמן', 'קונפליקט', 'אחר'))
         self.add('d3.mp3', FileTags('Band', 'Other', ''))
         self.add('d4.mp3', FileTags('אמן', 'חסר', ''))
-        results = {'Song': 'not_hebrew', 'קונפליקט': 'conflict'}
+        results = {'Song': 'added', 'קונפליקט': 'conflict'}
         fetches = {'Other': Answer(422, {'status': 'not_hebrew'}), 'חסר': Answer(404, {'status': 'not_found', 'retryAfter': 'x'})}
         client = FakeClient(put=lambda song, lyrics: Answer(200, {'result': results[song['title']]}),
                             fetch=lambda song: fetches[song['title']])
         stats = self.scan(client)
-        self.assertEqual((stats.not_hebrew, stats.conflicts, stats.not_found), (2, 1, 1))
+        self.assertEqual((stats.added, stats.not_hebrew, stats.conflicts, stats.not_found), (1, 1, 1, 1))
         self.assertEqual(stats.conflict_files, [os.path.join(self.root, 'd2.mp3')])
 
     def test_a_file_without_a_name_is_recorded_without_a_call(self):

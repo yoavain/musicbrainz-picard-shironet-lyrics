@@ -155,7 +155,7 @@ describe('API', () => {
     const replaced = await sendJson('PUT', '/lyrics', { ...SONG, lyrics: 'אחרת', ref: '/b.mp3', replace: true });
     assert.deepEqual(replaced.json(), { result: 'replaced' });
     const english = await sendJson('PUT', '/lyrics', { artist: 'Band', title: 'Song', lyrics: 'English words' });
-    assert.deepEqual(english.json(), { result: 'not_hebrew' });
+    assert.deepEqual(english.json(), { result: 'added' });
   });
   test('put without lyrics is refused', async () => {
     const reply = await sendJson('PUT', '/lyrics', SONG);

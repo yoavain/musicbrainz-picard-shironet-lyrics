@@ -4,7 +4,7 @@ import _support
 
 _support.load_plugin_package()
 
-from shironet_lyrics.plugin.lyrics_text import clean_lyrics  # noqa: E402
+from shironet_lyrics.plugin.lyrics_text import clean_lyrics, lrc_to_plain  # noqa: E402
 
 
 class CleanLyricsTest(unittest.TestCase):
@@ -54,6 +54,25 @@ class CleanLyricsTest(unittest.TestCase):
         text = 'Instrumental break\nThen we sing\nAnd sing\nAnd sing again'
         self.assertEqual(clean_lyrics(text), text)
         self.assertEqual(clean_lyrics('An instrumental song'), 'An instrumental song')
+
+
+class LrcToPlainTest(unittest.TestCase):
+    def test_time_tags_and_headers_are_removed(self):
+        text = '[ar:Artist]\r\n[ti:Title]\r\n[00:01.00]First line\r\n[00:05.50] Second line\r\n[01:02:03]שורה שלישית'
+        self.assertEqual(lrc_to_plain(text), 'First line\nSecond line\nשורה שלישית')
+
+    def test_repeated_lines_keep_one_copy_in_file_order(self):
+        self.assertEqual(lrc_to_plain('[00:10.00][01:10.00]Chorus\n[00:20.00]Verse'), 'Chorus\nVerse')
+
+    def test_word_time_tags_are_removed(self):
+        self.assertEqual(lrc_to_plain('[00:01.00]<00:01.00>One <00:01.50>two'), 'One two')
+
+    def test_gaps_become_one_blank_line(self):
+        text = '[00:00.00]\n[00:01.00]A\n[00:02.00]\n[00:03.00]\n[00:04.00]B\n[00:05.00]'
+        self.assertEqual(lrc_to_plain(text), 'A\n\nB')
+
+    def test_brackets_that_are_not_time_tags_stay(self):
+        self.assertEqual(lrc_to_plain('[00:01.00][Chorus]\n[00:02.00]La'), '[Chorus]\nLa')
 
 
 if __name__ == '__main__':

@@ -1,7 +1,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  cacheKey, cleanLyrics, collapseLines, hasHebrew, isHebrewSong, normalize, singleLine,
+  cacheKey, cleanLyrics, collapseLines, hasHebrew, hasHebrewName, normalize, singleLine,
 } from '../src/text.ts';
 
 describe('normalize (ported cases)', () => {
@@ -103,24 +103,14 @@ describe('Hebrew rule', () => {
   test('presentation forms are Hebrew', () => {
     assert.equal(hasHebrew('\uFB2A'), true);
   });
-  test('song with a Hebrew title or artist', () => {
-    assert.equal(isHebrewSong(['Mashina', 'את לא כמו כולם']), true);
-    assert.equal(isHebrewSong(['משינה', 'Rakevet Layla']), true);
-    assert.equal(isHebrewSong(['R.E.M.', 'The One I Love']), false);
-  });
-  test('song with a Hebrew language tag', () => {
-    assert.equal(isHebrewSong(['Mashina', 'Rakevet'], { language: 'heb' }), true);
-    assert.equal(isHebrewSong(['Mashina', 'Rakevet'], { language: ' HE ' }), true);
-    assert.equal(isHebrewSong(['Mashina', 'Rakevet'], { language: 'iw' }), true);
-    assert.equal(isHebrewSong(['Mashina', 'Rakevet'], { language: 'eng' }), false);
-  });
-  test('song with mostly Hebrew lyrics', () => {
-    assert.equal(isHebrewSong(['Mashina', 'Rakevet'], { lyrics: 'שורה ארוכה בעברית\nOh yeah' }), true);
-    assert.equal(isHebrewSong(['Band', 'Song'], { lyrics: 'An English song\nשלום' }), false);
+  test('a Hebrew title or artist makes a Hebrew name', () => {
+    assert.equal(hasHebrewName(['Mashina', 'את לא כמו כולם']), true);
+    assert.equal(hasHebrewName(['משינה', 'Rakevet Layla']), true);
+    assert.equal(hasHebrewName(['R.E.M.', 'The One I Love']), false);
   });
   test('missing names are ignored', () => {
-    assert.equal(isHebrewSong([null, undefined, 'שיר']), true);
-    assert.equal(isHebrewSong([]), false);
+    assert.equal(hasHebrewName([null, undefined, 'שיר']), true);
+    assert.equal(hasHebrewName([]), false);
   });
 });
 

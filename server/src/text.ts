@@ -25,9 +25,6 @@ const WHITESPACE = /\s+/gu;
 
 // Hebrew letters (U+05D0-U+05EA) and their presentation forms (U+FB1D-U+FB4F).
 const HEBREW_LETTER = /[\u05D0-\u05EA\uFB1D-\uFB4F]/u;
-const HEBREW_LETTERS = /[\u05D0-\u05EA\uFB1D-\uFB4F]/gu;
-const LATIN_LETTERS = /[A-Za-z]/g;
-const HEBREW_LANGUAGE_CODES = new Set(['heb', 'he', 'iw']);
 
 // "heb||" or "eng|None|" before the lyrics: lyricsify-cli wrote FLAC lyrics this way.
 const LANGUAGE_PREFIX = /^[A-Za-z]{3}\|[^|]*\|/;
@@ -78,25 +75,6 @@ export function hasHebrew(text: string | null | undefined): boolean {
 /** True when an artist or a title has a Hebrew letter: the rule for searching Shironet. */
 export function hasHebrewName(names: Array<string | null | undefined>): boolean {
   return names.some((name) => hasHebrew(name));
-}
-
-/**
- * A song is Hebrew when a name has a Hebrew letter, the language is a Hebrew code,
- * or the lyrics have more Hebrew letters than Latin letters.
- */
-export function isHebrewSong(
-  names: Array<string | null | undefined>,
-  options: { lyrics?: string | null; language?: string | null } = {},
-): boolean {
-  if (names.some((name) => hasHebrew(name))) return true;
-  const language = options.language?.trim().toLowerCase();
-  if (language && HEBREW_LANGUAGE_CODES.has(language)) return true;
-  if (options.lyrics) {
-    const hebrew = options.lyrics.match(HEBREW_LETTERS)?.length ?? 0;
-    const latin = options.lyrics.match(LATIN_LETTERS)?.length ?? 0;
-    return hebrew > latin;
-  }
-  return false;
 }
 
 /** Removes a leading "heb||"- or "eng|None|"-style prefix (and leading whitespace). */

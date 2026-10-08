@@ -86,7 +86,7 @@ class ServerClient:
         return self._call('POST', '/lyrics/fetch', {**_without_nulls(song), 'priority': priority})
 
     def put(self, song: dict, lyrics: str, ref: str | None, replace: bool) -> Answer:
-        """Lyrics a file already has. Answers {result: added|same|replaced|conflict|skipped|not_hebrew}."""
+        """Lyrics a file already has, in any language. Answers {result: added|same|replaced|conflict|skipped}."""
         return self._call('PUT', '/lyrics', {**_without_nulls(song), 'lyrics': lyrics, 'ref': ref, 'replace': replace})
 
     def requeue_not_found(self) -> int:

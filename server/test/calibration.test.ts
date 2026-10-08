@@ -34,6 +34,13 @@ describe('calibration bookkeeping', () => {
     queue.insert(store, [{ artist: 'אמן', title: 'משלי' }], 'bulk', NOW);
     assert.equal(pickSample(store, NOW, 90), undefined);
   });
+  test('pickSample takes songs with a Hebrew name only (the fetcher skips the rest)', () => {
+    store.put('Band', 'Song', 'English words', SOURCE_EMBEDDED);
+    store.put('Mashina', 'Rakevet', 'שורה', SOURCE_EMBEDDED);
+    assert.equal(pickSample(store, NOW, 90), undefined);
+    store.put('Mashina', 'רכבת', 'שורה', SOURCE_EMBEDDED);
+    assert.deepEqual(pickSample(store, NOW, 90), { artist: 'Mashina', title: 'רכבת' });
+  });
   test('a song calibrated within the gap is not picked again', () => {
     store.put('אמן', 'שיר', 'שורה', SOURCE_EMBEDDED);
     enqueueSample(store, { artist: 'אמן', title: 'שיר' }, NOW);

@@ -4,7 +4,7 @@
 
 import type { Store } from './store.ts';
 import { SOURCE_EMBEDDED } from './store.ts';
-import { cacheKey } from './text.ts';
+import { cacheKey, hasHebrewName } from './text.ts';
 
 export const COUNTER_KEY = 'calibration_since';
 export const ALERTED_KEY = 'calibration_alerted';
@@ -34,15 +34,21 @@ function cutoff(now: string, gapDays: number): string {
   return `${date.toISOString().slice(0, 19)}+00:00`;
 }
 
-/** A random embedded song that has no fetch row and no recent calibration. */
+/**
+ * A random embedded song with a Hebrew name (the only songs the fetcher searches) that
+ * has no fetch row and no recent calibration.
+ */
 export function pickSample(store: Store, now: string, gapDays: number): { artist: string; title: string } | undefined {
-  const row = store.db.prepare(
+  const rows = store.db.prepare(
     'SELECT l.artist, l.title FROM lyrics l WHERE l.source = ? AND NOT EXISTS ('
     + "  SELECT 1 FROM queue q WHERE q.artist_key = l.artist_key AND q.title_key = l.title_key"
     + "  AND (q.purpose = 'fetch' OR q.updated_at > ?)"
-    + ') ORDER BY RANDOM() LIMIT 1',
-  ).get(SOURCE_EMBEDDED, cutoff(now, gapDays)) as { artist: string; title: string } | undefined;
-  return row && { artist: row.artist, title: row.title };
+    + ') ORDER BY RANDOM()',
+  ).iterate(SOURCE_EMBEDDED, cutoff(now, gapDays)) as Iterable<{ artist: string; title: string }>;
+  for (const row of rows) {
+    if (hasHebrewName([row.artist, row.title])) return { artist: row.artist, title: row.title };
+  }
+  return undefined;
 }
 
 /** Queues one calibration sample. An older calibration row is reset; a fetch row is never touched. */
