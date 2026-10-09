@@ -202,6 +202,42 @@ python scripts/export_lyrics.py "D:\Music"
   removes a title-and-credits header and skips "instrumental" placeholders.
 - `--verbose` lists every file written; otherwise the first 20 and the totals.
 
+## Split WavPack album images into FLAC tracks
+
+`scripts/wv2flac.py` is a standalone tool for preparing albums before Picard tags them: it
+splits a single-file WavPack disc image into one FLAC per track. It is separate from the
+plugin and the server.
+
+```sh
+wv2flac "D:\Music\Album\album.wv"                  # or the .iso.wv, or the .cue
+wv2flac "D:\Music\Album\Cue and logs\Disc 1.cue" -o "D:\Out"
+```
+
+`wv2flac` is `C:\Dev-Tools\globalScripts\wv2flac.bat` (on `PATH`), a one-line wrapper that
+runs `scripts/wv2flac.py` from this repository. Edit the script here, not the wrapper.
+
+- **Inputs:** a plain `.wv`; a self-extracting `.wv` (WavPack data behind a Windows stub,
+  which is never run); an "ISO.WV" release (an ISO image that also plays as WavPack, unpacked
+  with 7-Zip); or a `.cue`, whose `.wv` is found next to it or one folder up.
+- **CUE sheet:** a `.cue` named after the `.wv` (next to it or one subfolder down), else the
+  only `.cue` next to it, else the `.wv`'s embedded `Cuesheet` tag. Without one, the whole
+  file becomes one FLAC with the source tags.
+- **Output:** `NN - Title.flac` next to the source (`-o` to change), or `NN.flac` when the CUE
+  has no titles. Cuts are sample-exact at each `INDEX 01`; gaps go to the end of the previous
+  track, and audio before track 1 becomes track `00`. Tags come from the CUE (title, artists,
+  album, date, genre, track/total, ISRC, barcode). A CUE titled `... [Disc N]` writes to a
+  `CDN` subfolder with `DISCNUMBER` set and the disc suffix removed from the album name.
+- **Covers:** an ISO.WV's cover scans, or pictures embedded in the `.wv`, are copied to
+  `Covers\`. Nothing is embedded in the FLACs.
+- **Encoding:** ffmpeg decodes and trims to a temporary WAV; CUETools' Flake encodes it. Do
+  not switch the encoder to ffmpeg's FLAC: through this pipeline it writes 1-second blocks
+  and no SEEKTABLE, which players fail to seek. Flake writes standard 4096-sample blocks and
+  a SEEKTABLE, and `--verify` checks every file.
+- Existing outputs stop the run; `--force` overwrites them. A `.wvc` correction file prints
+  a warning, because ffmpeg ignores it and the result is the lossy hybrid part only.
+- **Needs:** `ffmpeg` and `ffprobe` on `PATH`, `C:\Dev-Tools\CUETools_2.2.6\CUETools.Flake.exe`
+  (or `CUETools.Flake` on `PATH`), and 7-Zip for ISO.WV releases. Python standard library only.
+
 ## Use with LRCLIB Lyrics (non-Hebrew songs)
 
 This plugin covers Hebrew songs only. For other songs, it can run next to
@@ -229,7 +265,7 @@ Picard loads a plugin from the repository root, so the root holds `MANIFEST.toml
 | Path | Contents |
 |---|---|
 | `plugin/` | The Picard plugin: hooks and actions (`plugin.py`), the server client, the folder scan and its state, the tag reader, the Plex export and the lyrics import |
-| `scripts/` | Command-line tools: folder scan, lyrics import, Plex export, and `_bootstrap.py` (loads the plugin modules and Picard's bundled `mutagen` without Picard) |
+| `scripts/` | Command-line tools: folder scan, lyrics import, Plex export, the WavPack-to-FLAC splitter (`wv2flac.py`), and `_bootstrap.py` (loads the plugin modules and Picard's bundled `mutagen` without Picard) |
 | `tests/` | Python tests |
 | `server/` | The lyrics server: `src/` (TypeScript, run directly by Node), `test/`, `test-browser/` (opt-in tests on real Chrome), `tools/` (deploy script), `DEPENDENCIES.md` (Snyk decisions) |
 
